@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bob-the-buildooor — CIP-30 test dApp</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 760px; margin: 24px auto; padding: 0 16px; color: #1a202c; }
+      h1 { font-size: 20px; }
+      button { margin: 3px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+      input, textarea { width: 100%; box-sizing: border-box; font-family: monospace; font-size: 12px; margin: 4px 0; }
+      #log { background: #0b1021; color: #c8d3f5; font-family: monospace; font-size: 12px; padding: 12px;
+             border-radius: 8px; height: 320px; overflow: auto; white-space: pre-wrap; word-break: break-all; }
+      .ok { color: #7ee787; } .err { color: #ff7b72; } .dim { color: #8b949e; }
+      fieldset { border: 1px solid #e2e8f0; border-radius: 8px; margin: 10px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>bob-the-buildooor — CIP-30 test dApp</h1>
+    <p class="dim" id="detect">Detecting wallet…</p>
+
+    <fieldset>
+      <legend>Connect</legend>
+      <button onclick="call('isEnabled', () => api0().isEnabled())">isEnabled()</button>
+      <button onclick="enable()">enable()</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>Read (after enable)</legend>
+      <button onclick="call('getNetworkId', () => API.getNetworkId())">getNetworkId</button>
+      <button onclick="call('getUsedAddresses', () => API.getUsedAddresses())">getUsedAddresses</button>
+      <button onclick="call('getUnusedAddresses', () => API.getUnusedAddresses())">getUnusedAddresses</button>
+      <button onclick="call('getChangeAddress', () => API.getChangeAddress())">getChangeAddress</button>
+      <button onclick="call('getRewardAddresses', () => API.getRewardAddresses())">getRewardAddresses</button>
+      <button onclick="call('getBalance', () => API.getBalance())">getBalance</button>
+      <button onclick="call('getUtxos', () => API.getUtxos())">getUtxos</button>
+      <button onclick="call('getCollateral', () => API.getCollateral())">getCollateral</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>signData (CIP-8) — uses your first used address; verifies signature locally if possible</legend>
+      <input id="msg" value="Sign-in to bob test dApp" />
+      <button onclick="signData()">signData(addr, message)</button>
+    </fieldset>
+
+    <fieldset>
+      <legend>signTx (paste an unsigned tx CBOR hex the wallet owns inputs for)</legend>
+      <textarea id="txcbor" rows="3" placeholder="84a400..."></textarea>
+      <button onclick="call('signTx (witness set)', () => API.signTx(document.getElementById('txcbor').value.trim(), true))">signTx(tx, partialSign=true)</button>
+    </fieldset>
+
+    <div id="log"></div>
+
+    <script>
+      const WALLET = 'bob';
+      let API = null;
+      const logEl = document.getElementById('log');
+      function log(msg, cls = '') {
+        const t = new Date().toLocaleTimeString();
+        logEl.innerHTML += `<div class="${cls}"><span class="dim">${t}</span> ${msg}</div>`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+      function api0() {
+        if (!window.cardano || !window.cardano[WALLET]) throw new Error('window.cardano.' + WALLET + ' not found — is the extension loaded?');
+        return window.cardano[WALLET];
+      }
+      async function call(label, fn) {
+        try {
+          const r = await fn();
+          log(`✓ ${label}: ${typeof r === 'object' ? JSON.stringify(r) : r}`, 'ok');
+          return r;
+        } catch (e) {
+          log(`✗ ${label}: ${JSON.stringify(e)}`, 'err');
+        }
+      }
+      async function enable() {
+        await call('enable', async () => {
+          API = await api0().enable();
+          return 'API granted (approve the popup if prompted)';
+        });
+      }
+      async function signData() {
+        if (!API) return log('enable() first', 'err');
+        try {
+          const used = await API.getUsedAddresses();
+          const addr = used[0] || (await API.getChangeAddress());
+          const payloadHex = [...new TextEncoder().encode(document.getElementById('msg').value)]
+            .map((b) => b.toString(16).padStart(2, '0')).join('');
+          const sig = await API.signData(addr, payloadHex);
+          log(`✓ signData: signature=${sig.signature.slice(0, 24)}… key=${sig.key.slice(0, 24)}…`, 'ok');
+        } catch (e) {
+          log(`✗ signData: ${JSON.stringify(e)}`, 'err');
+        }
+      }
+      // Detect injection (content script runs at document_start; the provider lands shortly after).
+      function detect() {
+        const el = document.getElementById('detect');
+        if (window.cardano && window.cardano[WALLET]) {
+          const w = window.cardano[WALLET];
+          el.innerHTML = `<span class="ok">✓ Found ${w.name} (apiVersion ${w.apiVersion})</span>`;
+        } else {
+          el.textContent = 'window.cardano.bob NOT found — load the extension and reload this page.';
+        }
+      }
+      setTimeout(detect, 300);
+      window.addEventListener('load', () => setTimeout(detect, 300));
+    </script>
+  </body>
+</html>
