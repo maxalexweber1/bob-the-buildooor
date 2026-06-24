@@ -1,0 +1,51 @@
+name: CI
+
+# Run the full check suite on every push and pull request.
+on:
+  push:
+  pull_request:
+
+# Cancel superseded runs on the same ref (e.g. fast follow-up pushes).
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 20 = the engines floor (catches use of newer-only APIs); 22 = current LTS (catches breakage
+        # on a newer runtime). Bump/extend (e.g. 24) as the support window moves.
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      # Install scripts are blocked by .npmrc (ignore-scripts=true, supply-chain hardening).
+      # `allow-scripts run` then executes ONLY the vetted ones (esbuild's binary setup) — without it
+      # vite/vitest can't run. See package.json `lavamoat.allowScripts`.
+      - name: Install dependencies
+        run: |
+          npm ci
+          npm run allow-scripts
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm run test
+
+      - name: Build
+        run: npm run build

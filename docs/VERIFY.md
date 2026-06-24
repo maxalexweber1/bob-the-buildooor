@@ -1,7 +1,7 @@
 # Live Verification Guide
 
-Manual end-to-end checks for the loaded extension on **preview testnet**. These are the steps that
-can't run headlessly (real Chrome + service worker + chain). Each item maps to a plan `done-when`.
+Manual end-to-end checks for the loaded extension on **preview testnet** (real Chrome + service worker
++ chain). Each item maps to a plan `done-when`.
 
 > ⚠️ Preview/preprod **testnet only** (CLAUDE.md §2). Never use a mainnet seed with real funds here.
 
@@ -17,7 +17,9 @@ npm run build          # outputs dist/
 ```
 
 Load it: `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select `dist/`.
-Pin the toolbar icon. (For HMR dev instead: `npm run dev`, then load `dist/`.)
+Pin the toolbar icon. (For HMR dev instead: `npm run dev`, then load `dist/`.) After any rebuild,
+click the card's **reload ↻** so the new service worker loads; if `host_permissions` changed, Chrome
+re-prompts for the provider host access — accept it (else Koios/self-hosted fetches stay CORS-blocked).
 
 Serve the test dApp (separate terminal):
 ```bash
@@ -46,8 +48,10 @@ npx serve test-dapp    # or: python -m http.server -d test-dapp 8080
 | 2.2 | Refresh the Dashboard | Balance shows the funded ADA; assets listed if any | **T2.5** (matches explorer) |
 | 2.3 | Compare to a block explorer (e.g. preview.cardanoscan.io) for that address | Balance matches | T2.5 |
 | 2.4 | Switch network (preview→preprod→mainnet) in the dashboard dropdown | Balance refetches per network | T2.3 |
-| 2.5 | Options → Settings → switch provider to **Koios** → **Test connection** | "Connected ✓ tip slot …" | T2.3 |
-| 2.6 | (Ogmios) Settings → provider **ogmios**, URL `ws://localhost:1337` → **Test connection** | "Connected ✓ …" | T2.3 |
+| 2.5 | **Provider** tab → switch provider to **Koios** → **Save & test** | "Connected ✓ tip slot …"; the status badge turns green | T2.3 |
+| 2.6 | (Ogmios) Provider tab → **ogmios**, URL `ws://localhost:1337` → **Save & test** | "Connected ✓ …" | T2.3 |
+| 2.7 | **Activity** tab (on Blockfrost/Koios) | Recent txs with direction (↓/↑/↻), ±ADA, token deltas, explorer links | history |
+| 2.8 | **UTxOs** tab | Every unspent output (ref `txHash#i`, ADA, assets); total matches the balance | listUtxos |
 
 ## 3. M3 — Send & Sign
 
@@ -75,17 +79,17 @@ Open the served test dApp (e.g. http://localhost:3000) with the wallet **unlocke
 | 4.9 | Build an unsigned tx the wallet owns inputs for (e.g. via Send "Review" → grab the cbor, or a dApp), paste → **signTx** | Approval shows the decoded summary; returns a **witness-set** hex (not a full tx) | **T4.3** |
 | 4.10 | At any signTx/signData prompt, **Reject** (or close the window) | dApp gets `UserDeclined` | §1.4 |
 
-## 5. M5 — Plutus (partial)
+## 5. M5 — Plutus
 
-T5.1 (PlutusData JSON↔Data↔CBOR) is unit-tested. The 2-pass build (T5.2–T5.4) is **not implemented yet**
-— it needs a live Ogmios `evaluateTransaction` to verify ex-units + `scriptDataHash` before it can be
-trusted with funds. Once an Ogmios endpoint is configured (step 2.6 passing), that work can be built
-and verified against a real preview validator.
+Implemented and **verified on preview** via the `scripts/` proof tools (need a configured Ogmios for the
+2-pass `evaluateTransaction`): spend (inline datum or CIP-33 ref-script), mint, and ref-script deploy.
+Confirmed preview tx hashes: spend `c8ccca0f…`, mint `3353511e…`, ref-script spend `461468ec…`. PlutusData
+JSON↔Data↔CBOR is unit-tested. Run the scripts against a preview validator with `BLOCKFROST_API_KEY` set.
 
 ---
 
 ## Reporting back
 
-If you run these and paste the **test-dApp log** + any popup screenshots (or just describe failures),
-I can fix issues without a browser on my side. The unit suite (`npm test`, 129 tests) already covers
-the pure logic; this guide covers the browser/chain integration it can't reach.
+For any failure, capture the test-dApp log / popup screenshot / provider-badge error text. The unit
+suite (`npm test`, 168 tests) covers the pure logic; this guide covers the browser/chain integration
+on top of it.

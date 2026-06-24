@@ -6,7 +6,9 @@ A standalone Cardano **self-custody browser-extension wallet** (CIP-30), built o
 - **HD wallet** from a BIP39 mnemonic (CIP-1852 derivation), keys encrypted locally, **client-side signing**.
 - **dApp connector** as `window.cardano.<name>` (CIP-30 + CIP-8 `signData` + CIP-95 governance).
 - **Transactions** via buildooor: ADA, native tokens, **Plutus** (spend/mint), Conway governance.
-- **Swappable chain providers** (Blockfrost / Koios / Ogmios) no mandatory custom backend.
+- **Wallet UI:** balances & assets, decode-before-sign send, transaction history, UTxO list, in-popup
+  provider switching with a live connection-status badge.
+- **Swappable chain providers** (Blockfrost / Koios / Ogmios) — public or self-hosted, no mandatory backend.
 - Pure-TS stack, no WASM → strict Manifest V3 CSP (`script-src 'self'`).
 
 ## ⚠️ Status — work in progress, unaudited, do not use on mainnet

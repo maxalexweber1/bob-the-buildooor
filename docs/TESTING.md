@@ -1,20 +1,20 @@
 # Testing (T7.3)
 
-Three layers, per CLAUDE.md §7. Unit is the default and the gate; integration is testnet-only; e2e
-needs a real browser and is run by a human.
+Three layers, per CLAUDE.md §7. Unit is the default and the gate; integration is testnet-only; e2e is
+checked manually against a loaded build (see `docs/VERIFY.md`).
 
-## Unit (default, CI gate) — 20 files / 145 tests, all green
+## Unit (default, CI gate) — 24 files / 168 tests, all green
 
 `npm run test` (vitest). Covers the security-critical pure logic:
 
 - **Crypto / keys:** `crypto`, `keys`, `mnemonic`, `vault` — KDF round-trips, BIP39/CIP-1852 known
   vectors, AES-GCM encrypt→decrypt, vault tamper rejection.
-- **Address / tx:** `address`, `balance`, `tx`, `coinSelect`, `cip30Select`, `collateral`,
-  `plutusBuild`, `plutusData` — derivation, value math, coin selection, Plutus build/eval shapes.
-- **COSE / CIP-30:** `cose` (CIP-8 sign↔verify), `cip30`, `errors` — message shapes and exact CIP-30
-  error codes.
-- **Bridge security:** `senderTrust`, `allowlist`, `messages`, `discovery`, `provider` — trusted-sender
-  discrimination, origin allowlist, message validation.
+- **Address / tx:** `address`, `balance`, `tx`, `coinSelect`, `collateral`, `plutusBuild`,
+  `plutusData`, `summary`, `history` — derivation, value math, coin selection, Plutus build/eval,
+  decode-before-sign (mint/withdrawal decode), and tx-history net-delta.
+- **COSE / CIP-30:** `cose` (CIP-8 sign↔verify), `cip30`, `cip30Select`, `errors` — shapes + codes.
+- **Bridge / connectivity security:** `senderTrust`, `allowlist`, `approvals` (concurrent-prompt
+  isolation), `origin` (opaque-origin guard), `messages`, `discovery`, `provider`.
 
 Any change touching keys, signing, or the message bridge must add/extend a unit test (CLAUDE.md §7).
 
@@ -34,18 +34,3 @@ Empirical proof scripts under `scripts/` validate the buildooor recipes and real
 Confirmed preview tx hashes are recorded in the build history (spend `c8ccca0f…`, mint `3353511e…`,
 ref-script spend `461468ec…`).
 
-## End-to-end (Playwright, **needs a browser — human-run**)
-
-Not yet automated; cannot run headlessly in this environment (MV3 service-worker e2e needs a real
-Chromium with the unpacked extension loaded). Plan when picked up:
-
-1. Add `@playwright/test` as a dev dependency (weigh per CLAUDE.md §2).
-2. Launch persistent context with `--load-extension=dist` + `--disable-extensions-except=dist` after
-   `npm run build`.
-3. Cover the critical user paths: onboarding (create → confirm seed subset → set password),
-   lock/unlock across a forced service-worker restart, send-review screen renders the decoded summary,
-   and a CIP-30 connect+sign approval flow against a stub dApp page.
-4. Run in CI with `xvfb` (Linux) headed mode.
-
-Until then, these paths are verified manually on a `npm run dev` build (see `docs/STORE.md` submission
-checklist).

@@ -52,6 +52,10 @@ record. The binding invariants live in [CLAUDE.md §1](../CLAUDE.md).
   stack means **no `wasm-unsafe-eval`**. `frame-ancestors 'none'` hardens against clickjacking.
 - Untrusted strings (addresses, token names, metadata, dApp origin) render as React **text nodes**
   only — never `dangerouslySetInnerHTML`.
+- **Scoped network access:** `host_permissions` cover only the public providers (`*.koios.rest`,
+  `*.blockfrost.io`) — read-only data endpoints, no key material sent. A self-hosted provider host is
+  granted **at runtime** (Provider settings, on Save) via `optional_host_permissions`, so the default
+  install stays minimal. No host grant for dApp pages (the CIP-30 relay needs none).
 - All randomness is CSPRNG (`crypto.getRandomValues` / `@noble` via `@scure/bip39`) — no `Math.random`.
 - Dependencies are **exact-pinned**, lockfile committed, 0 production vulnerabilities. Install scripts
   are **blocked by default** (`.npmrc ignore-scripts=true` + `@lavamoat/allow-scripts`); only the
@@ -75,7 +79,7 @@ CSPRNG, CSP `frame-ancestors`, recipient paste caution. Each fix has unit-test c
   or round-trip Conway governance certs (`isCertificate` rejects them). Revisit on buildooor support.
 - `getRegisteredPubStakeKeys` doesn't yet query on-chain registration (returns `[]`).
 - Hardware-wallet support (Ledger/Trezor) not yet implemented.
-- Firefox build not yet shipped (`docs/FIREFOX.md`); e2e/browser tests are human-run (`docs/TESTING.md`).
+- Firefox build not yet shipped (`docs/FIREFOX.md`); browser/e2e checks are manual (`docs/VERIFY.md`).
 - Not yet exercised by an external penetration test.
 
 ## Reporting

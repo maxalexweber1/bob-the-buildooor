@@ -120,7 +120,10 @@ Core rules:
   "permissions": ["storage", "unlimitedStorage", "idle", "alarms"]
 }
 ```
-> CIP-30 injection needs **no** `host_permissions`. Thanks to the pure-JS stack, **no** `'wasm-unsafe-eval'` required.
+> CIP-30 injection needs **no** `host_permissions` (the content-script relay suffices). Chain-data
+> providers, however, do: the public hosts (`*.koios.rest`, `*.blockfrost.io`) are declared, and a
+> self-hosted host is requested at runtime via `optional_host_permissions`. Pure-JS stack → **no**
+> `'wasm-unsafe-eval'` and the CSP also carries `frame-ancestors 'none'`.
 
 ---
 
@@ -303,10 +306,6 @@ After `enable()` (origin persisted in the allowlist) the full API is granted. **
 ---
 
 ## 11. Roadmap (phases & milestones)
-
-**M0 — Scaffold (1 sprint)**
-- Repo, Vite + crxjs, MV3 manifest, React popup shell, empty SW loads.
-- inpage→content→background→popup message bridge end-to-end (echo test with id/origin filters).
 
 **M1 — Keyring & vault (core)**
 - BIP39 generate/import/validate; CIP-1852 derivation; address derivation; gap-limit discovery.

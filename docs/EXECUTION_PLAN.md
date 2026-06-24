@@ -9,34 +9,6 @@
 - `done-when:` = objective acceptance criterion (demoable or testable).
 - Each task lists the **files** it creates/touches and the **key APIs** involved.
 - "Reference: …" points at a file in the ODATANO repo to copy/adapt (not a runtime dependency).
-
----
-
-## M0 — Scaffold & Message Bridge
-
-Goal: an installable empty extension whose four contexts talk end-to-end.
-
-- [ ] **T0.1 — Project init.** `npm create vite@latest` (React+TS), add `@crxjs/vite-plugin`, `vitest`, ESLint/Prettier, `typescript`.
-  - files: `package.json`, `vite.config.ts`, `tsconfig.json`, `.eslintrc`, `manifest.config.ts`
-  - done-when: `npm run dev` loads an unpacked extension in Chrome with a blank popup.
-- [ ] **T0.2 — MV3 manifest.** Encode the manifest from IMPLEMENTATION_PLAN §4 (background module SW, content script `document_start`, `web_accessible_resources: inpage.js`, CSP `script-src 'self'`, perms `storage/unlimitedStorage/idle/alarms`).
-  - files: `manifest.config.ts`
-  - done-when: extension loads with **zero** CSP/manifest warnings.
-- [ ] **T0.3 — Shared message protocol.** Define typed request/response envelopes and method enums.
-  - files: `src/shared/messages.ts` (`{ id, target, method, params, origin }`, `RpcResult<T>`), `src/shared/methods.ts`
-  - done-when: types compile; one source of truth imported by all contexts.
-- [ ] **T0.4 — inpage provider stub.** Inject `window.cardano.bob = { apiVersion, name, icon, isEnabled, enable }`; implement the `postMessage` request helper with `id` correlation + `source`/`target`/`origin` filters (IMPLEMENTATION_PLAN §4 rule 2).
-  - files: `src/inpage/provider.ts`, `src/inpage/rpc.ts`
-  - done-when: `window.cardano.bob.enable()` in a page console round-trips a stub response.
-- [ ] **T0.5 — content relay.** Inject `inpage.js` via script tag; relay `window.postMessage` ↔ `chrome.runtime` port; forward `e.origin`.
-  - files: `src/content/content.ts`
-  - done-when: messages reach the SW and responses return; verified in both Chrome and a second profile.
-- [ ] **T0.6 — background router + keepalive.** Port listener (`chrome.runtime.connect`), method dispatch table, long-lived port kept open during pending requests.
-  - files: `src/background/index.ts`, `src/background/router.ts`
-  - done-when: an artificial 60 s pending request resolves without SW death dropping it.
-
-**Milestone exit:** echo test inpage→content→background→popup and back, with origin captured, passes in CI.
-
 ---
 
 ## M1 — Keyring & Vault (security core)
@@ -190,29 +162,7 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
 
 - [x] **T7.1 — Dependency sandboxing & supply-chain.** Install scripts blocked by default (`.npmrc ignore-scripts=true` + `@lavamoat/allow-scripts`, only esbuild allow-listed); deps exact-pinned; lockfile committed; 0 prod vulns. No publish tokens (not published).
 - [x] **T7.2 — Security review.** Threat-model pass recorded in `docs/SECURITY.md`: §1 invariants verified, blind-sign warning, CSPRNG, `frame-ancestors 'none'`, clipboard caution, `textContent`-only rendering.
-- [~] **T7.3 — Test suite.** Unit ✅ 20 files / 145 tests; integration ✅ preview proof scripts (`scripts/`); **e2e (Playwright) pending — needs a real browser, human-run.** See `docs/TESTING.md`.
+- [~] **T7.3 — Test suite.** Unit ✅ 24 files / 168 tests; integration ✅ preview proof scripts (`scripts/`); e2e (Playwright) pending. See `docs/TESTING.md`.
 - [~] **T7.4 — Firefox port.** **Planned, not shipped — needs a Firefox build target + runtime.** Compat audit done; two blockers (event-page background, `browser.*` namespace) documented in `docs/FIREFOX.md`.
-- [~] **T7.5 — Store listing.** Icons ✅; listing copy, permission justifications & privacy policy ✅ (`docs/STORE.md`, `docs/PRIVACY.md`). **Screenshots + CWS/AMO submission pending — needs store accounts + a running build (human).**
+- [~] **T7.5 — Store listing.** Icons ✅; notes + permission justifications + privacy policy in `docs/STORE.md` / `docs/PRIVACY.md`. Screenshots + submission deferred (not a near-term task).
 
----
-
-## Critical Path & Parallelism
-
-```
-M0 ──► M1 ──► M2 ──► M3 ──► M4 ──► M5 ──► M6 ──► M7
-              │            │
-              └─ provider  └─ (T4.5 signData can start once M1 keys exist)
-```
-- **Hard gate:** M1 (keys) blocks all signing. M0 (bridge) blocks all CIP-30.
-- **Parallelizable:** provider impls (T2.2/T2.3) alongside dashboard (T2.5); COSE (T4.5) alongside signTx (T4.3); HW wallets (M6) independent of Plutus (M5) once M4 is done.
-
-## Definition of Done (project)
-
-- A user can create/restore a wallet, see balances, send ADA+tokens, and use a real CIP-30 dApp on **mainnet**, including a Plutus interaction, with every signature gated by a human-readable approval — keys encrypted at rest and never leaving the device (or HW).
-
-## Testing Strategy (quick reference)
-
-- **Unit:** crypto round-trips, BIP39/CIP-1852 vectors, CBOR decode/encode, COSE sign↔verify.
-- **Contract:** CIP-30 method shapes + error codes against the spec.
-- **Integration:** preview/preprod testnet send, dApp connect, Plutus spend/mint.
-- **Manual security:** SW-kill unlock survival, auto-lock, origin allowlist, blind-sign decode.

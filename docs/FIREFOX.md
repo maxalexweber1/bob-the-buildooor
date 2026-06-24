@@ -1,8 +1,8 @@
 # Firefox Port (T7.4)
 
-Status: **planned, not yet shipped.** The Chrome (MV3) build is the supported target. A Firefox build
-needs the changes below and a Firefox runtime to verify — it cannot be completed in a headless/CI-only
-environment. This document is the concrete port plan so the work is mechanical when picked up.
+Status: **planned, not yet shipped.** The Chrome (MV3) build is the supported target. This is the
+concrete port plan — the changes below plus a verification pass on Firefox — so the work is mechanical
+when picked up.
 
 ## Compatibility audit (done)
 
@@ -55,7 +55,7 @@ The MAIN-world CIP-30 provider is injected via a `<script>` tag pointing at a
   Bridge / WebAuthn paths. Out of scope until HW (T6.3/T6.4) lands at all.
 - **Tooling:** use `web-ext run` / `web-ext lint` for local Firefox testing and AMO pre-validation.
 
-## Definition of done (needs Firefox)
+## Definition of done
 
 - `ext.*` shim (or polyfill) in place; Chrome build unchanged and green.
 - Separate Firefox build target emits an event-page manifest + `browser_specific_settings`.
