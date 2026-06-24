@@ -144,6 +144,34 @@ describe('BlockfrostProvider (mocked fetch)', () => {
     vi.stubGlobal('fetch', vi.fn(async () => res('Not Found', 404)));
     expect(await p.isConfirmed(TXID)).toBe(false);
   });
+
+  it('getAddressTransactions maps refs (newest-first as the API returns them)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res([{ tx_hash: TXID, block_height: 100, block_time: 1700000000 }])));
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    expect(await p.getAddressTransactions(ADDR)).toEqual([{ txHash: TXID, blockTime: 1700000000, blockHeight: 100 }]);
+  });
+
+  it('getTxDetail maps IO and excludes collateral/reference inputs', async () => {
+    const utxos = {
+      inputs: [
+        { address: 'addr_a', amount: [{ unit: 'lovelace', quantity: '10000000' }] },
+        { address: 'addr_collat', amount: [{ unit: 'lovelace', quantity: '5000000' }], collateral: true },
+        { address: 'addr_ref', amount: [{ unit: 'lovelace', quantity: '2000000' }], reference: true },
+      ],
+      outputs: [
+        { address: 'addr_b', amount: [{ unit: 'lovelace', quantity: '3000000' }, { unit: ASSET, quantity: '1' }] },
+        { address: 'addr_a', amount: [{ unit: 'lovelace', quantity: '6800000' }] },
+      ],
+    };
+    const fetchMock = vi.fn(async (url: string) => (url.includes('/utxos') ? res(utxos) : res({ fees: '200000' })));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    const d = await p.getTxDetail(TXID);
+    expect(d.inputs).toHaveLength(1); // collateral + reference excluded
+    expect(d.inputs[0]?.address).toBe('addr_a');
+    expect(d.outputs).toHaveLength(2);
+    expect(d.fee).toBe('200000');
+  });
 });
 
 // ---- Ogmios over a fake WebSocket ----
@@ -341,5 +369,23 @@ describe('createProvider factory', () => {
 
   it('throws when required config is missing', () => {
     expect(() => createProvider({ kind: 'ogmios', network: 'preview' })).toThrow(/ogmiosUrl/);
+  });
+
+  it('routes Koios to a custom base URL (self-hosted / env-provided)', async () => {
+    const fetchMock = vi.fn(async () => res([{ hash: 'abc', abs_slot: 1, block_no: 2 }]));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = createProvider({ kind: 'koios', network: 'preview', koiosUrl: 'https://my-koios.example/api/v1' });
+    await p.getTip?.();
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url.startsWith('https://my-koios.example/api/v1')).toBe(true);
+  });
+
+  it('falls back to the public Koios base when the custom URL is empty (unset .env line)', async () => {
+    const fetchMock = vi.fn(async () => res([{ hash: 'abc', abs_slot: 1, block_no: 2 }]));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = createProvider({ kind: 'koios', network: 'preview', koiosUrl: '' });
+    await p.getTip?.();
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(url.startsWith('https://preview.koios.rest/api/v1')).toBe(true);
   });
 });

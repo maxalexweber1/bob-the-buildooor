@@ -13,6 +13,8 @@ export interface WalletSettings {
   blockfrostProjectIds?: Partial<Record<Network, string>> | undefined;
   /** Optional Koios bearer token (free tier works without one). */
   koiosApiKey?: string | undefined;
+  /** Optional custom/self-hosted Koios base URL (incl. API path). Overrides env + the public default. */
+  koiosUrl?: string | undefined;
 }
 
 export const SETTINGS_STORAGE_KEY = 'bob:settings';

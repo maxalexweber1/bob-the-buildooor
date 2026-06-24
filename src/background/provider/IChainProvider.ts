@@ -23,6 +23,22 @@ export interface ChainTip {
   height: number;
 }
 
+/** A reference to a transaction touching an address (history listing), newest first. */
+export interface AddressTxRef {
+  txHash: string;
+  /** Unix seconds of the containing block (0 if unknown). */
+  blockTime: number;
+  blockHeight: number;
+}
+
+/** Full input/output detail of a tx — enough to compute the wallet's net delta (T-history). */
+export interface TxIODetail {
+  txHash: string;
+  inputs: Array<{ address: string; amount: Array<{ unit: string; quantity: string }> }>;
+  outputs: Array<{ address: string; amount: Array<{ unit: string; quantity: string }> }>;
+  fee?: string;
+}
+
 /** One redeemer's execution-unit budget from an `evaluateTx` pass (Ogmios). Used by the M5 2-pass build. */
 export interface ScriptEvalResult {
   /** Redeemer pointer — Ogmios returns `{ purpose, index }` (purpose: spend|mint|publish|withdraw|vote|propose). */
@@ -56,6 +72,12 @@ export interface IChainProvider {
   getTip?(): Promise<ChainTip>;
   /** Has this tx hash been included on-chain? Drives post-submit confirmation polling (needs history). */
   isConfirmed?(txHash: string): Promise<boolean>;
+
+  // ---- transaction history (needs historic state: Blockfrost/Koios; Ogmios omits → unsupported) ----
+  /** Transactions touching an address, newest first; `page` is 1-based. */
+  getAddressTransactions?(address: string, page?: number): Promise<AddressTxRef[]>;
+  /** Full IO of a tx, for computing the wallet's net effect. */
+  getTxDetail?(txHash: string): Promise<TxIODetail>;
 
   /**
    * Release long-lived resources (e.g. the Ogmios WebSocket). Stateless HTTP providers omit it. The

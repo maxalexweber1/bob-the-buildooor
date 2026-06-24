@@ -2,7 +2,7 @@
 // node-oriented and would bloat the SW). Field mappings mirror ODATANO's blockfrost-backend.ts.
 import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolParameters, type UTxO } from '@harmoniclabs/buildooor';
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
-import { type ChainTip, type IChainProvider, type Network } from './IChainProvider';
+import { type AddressTxRef, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
 import { BLOCKFROST_BASE_URL, DEFAULT_TIMEOUT_MS, fetchJson, genesisInfosFor } from './network';
 import { costModelsFromArrays, mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
 
@@ -162,6 +162,36 @@ export class BlockfrostProvider implements IChainProvider {
   /** Confirmed once /txs/{hash} exists (404 = not yet on-chain). */
   async isConfirmed(txHash: string): Promise<boolean> {
     return (await this.get<{ hash: string }>(`/txs/${txHash}`, true)) !== null;
+  }
+
+  /** Recent transactions at an address, newest first (20/page). 404 (unused address) → []. */
+  async getAddressTransactions(address: string, page = 1): Promise<AddressTxRef[]> {
+    const rows = await this.get<Array<{ tx_hash: string; block_height: number; block_time: number }>>(
+      `/addresses/${address}/transactions?order=desc&count=20&page=${page}`,
+      true,
+    );
+    if (!rows) return [];
+    return rows.map((r) => ({ txHash: r.tx_hash, blockTime: r.block_time, blockHeight: r.block_height }));
+  }
+
+  /** Full tx IO for net-delta. Excludes collateral/reference inputs (not value the tx actually spends). */
+  async getTxDetail(txHash: string): Promise<TxIODetail> {
+    const data = await this.get<{
+      inputs: Array<{ address: string; amount: AmountUnit[]; collateral?: boolean; reference?: boolean }>;
+      outputs: Array<{ address: string; amount: AmountUnit[] }>;
+    }>(`/txs/${txHash}/utxos`);
+    if (!data) throw new Error(`blockfrost: tx ${txHash} utxos not found`);
+    const meta = await this.get<{ fees?: string }>(`/txs/${txHash}`, true);
+    const party = (p: { address: string; amount: AmountUnit[] }) => ({
+      address: p.address,
+      amount: p.amount.map((a) => ({ unit: a.unit, quantity: a.quantity })),
+    });
+    return {
+      txHash,
+      inputs: data.inputs.filter((i) => !i.collateral && !i.reference).map(party),
+      outputs: data.outputs.map(party),
+      ...(meta?.fees ? { fee: meta.fees } : {}),
+    };
   }
 
   // NOTE: no `evaluateTx` — Blockfrost-REST has no authoritative ledger-state eval. Callers detect

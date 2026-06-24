@@ -7,9 +7,10 @@ import type { WalletSettings } from '../background/settings';
 import type { WalletBalance } from '../core/balance';
 import type { Network, ChainTip } from '../background/provider/IChainProvider';
 import type { TxSummary } from '../core/tx/summary';
+import type { HistoryEntry } from '../core/tx/history';
 import type { PendingApproval } from '../background/dapp/approvals';
 
-export type { ChainTip, TxSummary, PendingApproval };
+export type { ChainTip, TxSummary, HistoryEntry, PendingApproval };
 
 /** Result of building a send: an id binding the approval to the exact decoded summary shown. */
 export interface BuiltTx {
@@ -21,6 +22,14 @@ export interface SubmitResult {
 }
 
 export type TxStatus = 'confirmed' | 'pending' | 'unknown';
+
+/** A single unspent output the wallet controls (across its HD addresses). */
+export interface UtxoView {
+  txHash: string;
+  outputIndex: number;
+  address: string;
+  value: WalletBalance;
+}
 
 export const INTERNAL_TARGET = 'bob:internal' as const;
 
@@ -57,6 +66,8 @@ export type WalletCommand =
   | { type: 'respondApproval'; reqId: string; approved: boolean }
   | { type: 'listConnectedDapps' }
   | { type: 'revokeDapp'; origin: string }
+  | { type: 'getHistory' }
+  | { type: 'listUtxos' }
   | { type: 'getTxStatus'; txHash: string };
 
 export interface InternalRequest {

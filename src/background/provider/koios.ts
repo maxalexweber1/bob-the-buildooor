@@ -4,7 +4,7 @@
 // cardano-cli-shaped /cli_protocol_params (its field names line up with buildooor's ProtocolParameters).
 import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolParameters, type UTxO } from '@harmoniclabs/buildooor';
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
-import { type ChainTip, type IChainProvider, type Network } from './IChainProvider';
+import { type AddressTxRef, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
 import { DEFAULT_TIMEOUT_MS, KOIOS_BASE_URL, fetchJson, genesisInfosFor } from './network';
 import { costModelsFromArrays, mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
 
@@ -50,9 +50,14 @@ export class KoiosProvider implements IChainProvider {
   private readonly timeoutMs: number;
   private readonly authHeader: Record<string, string>;
 
-  constructor(network: Network, opts: { apiKey?: string | undefined; timeoutMs?: number | undefined } = {}) {
+  constructor(
+    network: Network,
+    opts: { apiKey?: string | undefined; baseUrl?: string | undefined; timeoutMs?: number | undefined } = {},
+  ) {
     this.network = network;
-    this.base = KOIOS_BASE_URL[network];
+    // A custom/self-hosted Koios endpoint overrides the public default (e.g. from VITE_KOIOS_URL).
+    // `||` so an empty string can never become the base URL (would break every request).
+    this.base = opts.baseUrl || KOIOS_BASE_URL[network];
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.authHeader = opts.apiKey ? { Authorization: `Bearer ${opts.apiKey}` } : {};
   }
@@ -143,6 +148,46 @@ export class KoiosProvider implements IChainProvider {
   async isConfirmed(txHash: string): Promise<boolean> {
     const rows = (await this.post<Array<{ num_confirmations: number | null }>>('/tx_status', { _tx_hashes: [txHash] })) ?? [];
     return (rows[0]?.num_confirmations ?? 0) > 0;
+  }
+
+  /** Recent transactions at an address, newest first (PostgREST order/limit/offset; 20/page). */
+  async getAddressTransactions(address: string, page = 1): Promise<AddressTxRef[]> {
+    const rows =
+      (await this.post<Array<{ tx_hash: string; block_height: number; block_time: number }>>(
+        `/address_txs?order=block_height.desc&limit=20&offset=${(page - 1) * 20}`,
+        { _addresses: [address] },
+      )) ?? [];
+    return rows.map((r) => ({ txHash: r.tx_hash, blockTime: r.block_time, blockHeight: r.block_height }));
+  }
+
+  /** Full tx IO for net-delta. Koios `inputs` already exclude collateral/reference inputs. */
+  async getTxDetail(txHash: string): Promise<TxIODetail> {
+    interface KoiosParty {
+      payment_addr?: { bech32?: string } | null;
+      value: string;
+      asset_list?: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
+    }
+    const rows =
+      (await this.post<Array<{ fee?: string | number; inputs?: KoiosParty[]; outputs?: KoiosParty[] }>>('/tx_info', {
+        _tx_hashes: [txHash],
+        _inputs: true,
+        _assets: true,
+      })) ?? [];
+    const tx = rows[0];
+    if (!tx) throw new Error(`koios: tx ${txHash} not found`);
+    const party = (p: KoiosParty) => ({
+      address: p.payment_addr?.bech32 ?? '',
+      amount: [
+        { unit: 'lovelace', quantity: String(p.value) },
+        ...(p.asset_list ?? []).map((a) => ({ unit: `${a.policy_id}${a.asset_name}`, quantity: a.quantity })),
+      ],
+    });
+    return {
+      txHash,
+      inputs: (tx.inputs ?? []).map(party),
+      outputs: (tx.outputs ?? []).map(party),
+      ...(tx.fee !== undefined ? { fee: String(tx.fee) } : {}),
+    };
   }
 
   // No evaluateTx — Koios has no ledger-state script eval; use Ogmios for Plutus ex-units (M5).

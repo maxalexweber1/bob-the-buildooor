@@ -1,15 +1,17 @@
 // Privileged wallet command handlers (T1.7). Invoked by the router ONLY for trusted extension-page
 // senders. Composes the vault (M1) with key/address derivation. Decrypted material (mnemonic, root)
 // lives only in these function scopes and is discarded on return (CLAUDE.md §1.1).
-import type { WalletCommand, WalletStatus, WalletOverview, BuiltTx, SubmitResult } from '../shared/internal';
+import type { WalletCommand, WalletStatus, WalletOverview, BuiltTx, SubmitResult, UtxoView } from '../shared/internal';
 import { vault } from './vault';
 import { chromeSessionStore } from './storage';
 import { touchAutoLock, cancelAutoLock } from './autolock';
 import { mnemonicToRoot, deriveKey, Role } from '../core/keys';
 import { accountKeys, baseAddress, baseAddressFrom, bech32Network } from '../core/address';
-import { aggregateBalance } from '../core/balance';
+import { aggregateBalance, valueView } from '../core/balance';
 import { buildSend } from '../core/tx/build';
 import { summarizeTx } from '../core/tx/summary';
+import { computeHistoryEntry, type HistoryEntry } from '../core/tx/history';
+import type { AddressTxRef } from './provider/IChainProvider';
 import { signTxCbor } from './signer';
 import { toHex } from '../core/crypto/encoding';
 import { settings } from './settings';
@@ -56,6 +58,86 @@ async function overview(): Promise<WalletOverview> {
     balance: aggregateBalance(utxos),
   };
   overviewCache.set(cacheKey, { at: Date.now(), data });
+  return data;
+}
+
+// ---- Transaction history (read-only; needs historic state → Blockfrost/Koios, not Ogmios) ----
+const HISTORY_TTL_MS = 15_000;
+const HISTORY_LIMIT = 15;
+const historyCache = new Map<string, { at: number; data: HistoryEntry[] }>();
+
+async function history(): Promise<HistoryEntry[]> {
+  const s = await settings.get();
+  const cacheKey = `${s.network}:${s.providerKind}`;
+  const hit = historyCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < HISTORY_TTL_MS) return hit.data;
+
+  const provider = await getProvider();
+  // Bind so the optional methods keep their `this` and TS narrows away `undefined` (no non-null `!`).
+  const getTxs = provider.getAddressTransactions?.bind(provider);
+  const getDetail = provider.getTxDetail?.bind(provider);
+  if (!getTxs || !getDetail) {
+    throw new Error(`${provider.name} has no transaction history — switch to Blockfrost or Koios in Settings`);
+  }
+
+  const mnemonic = await vault.getMnemonic();
+  const root = mnemonicToRoot(mnemonic);
+  touchAutoLock();
+
+  const external = await discoverChain(root, s.network, Role.External, provider);
+  const change = await discoverChain(root, s.network, Role.Internal, provider);
+  const receiveAddress = baseAddress(root, bech32Network(s.network), 0, nextReceiveIndex(external), Role.External);
+  const ownAddrs = [...external, ...change].map((a) => a.address);
+  if (!ownAddrs.includes(receiveAddress)) ownAddrs.push(receiveAddress);
+  const ownSet = new Set(ownAddrs);
+
+  // Collect recent tx refs across all own addresses, dedup by hash (newest blockTime wins).
+  const refLists = await Promise.all(ownAddrs.map((a) => getTxs(a)));
+  const byHash = new Map<string, AddressTxRef>();
+  for (const list of refLists) {
+    for (const r of list) {
+      const prev = byHash.get(r.txHash);
+      if (!prev || r.blockTime > prev.blockTime) byHash.set(r.txHash, r);
+    }
+  }
+  const top = [...byHash.values()].sort((a, b) => b.blockTime - a.blockTime).slice(0, HISTORY_LIMIT);
+
+  const data = await Promise.all(
+    top.map(async (ref) => computeHistoryEntry(await getDetail(ref.txHash), ownSet, ref.blockTime)),
+  );
+  historyCache.set(cacheKey, { at: Date.now(), data });
+  return data;
+}
+
+// ---- UTxO listing (read-only; the wallet's current unspent outputs across its HD addresses) ----
+const UTXO_TTL_MS = 10_000;
+const utxoCache = new Map<string, { at: number; data: UtxoView[] }>();
+
+async function listUtxos(): Promise<UtxoView[]> {
+  const s = await settings.get();
+  const cacheKey = `${s.network}:${s.providerKind}`;
+  const hit = utxoCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < UTXO_TTL_MS) return hit.data;
+
+  const provider = await getProvider();
+  const mnemonic = await vault.getMnemonic();
+  const root = mnemonicToRoot(mnemonic);
+  touchAutoLock();
+
+  const external = await discoverChain(root, s.network, Role.External, provider);
+  const change = await discoverChain(root, s.network, Role.Internal, provider);
+  const receiveAddress = baseAddress(root, bech32Network(s.network), 0, nextReceiveIndex(external), Role.External);
+  const addrs = [...external, ...change].map((a) => a.address);
+  if (!addrs.includes(receiveAddress)) addrs.push(receiveAddress);
+
+  const utxos = (await Promise.all(addrs.map((a) => provider.getUtxos(a)))).flat();
+  const data: UtxoView[] = utxos.map((u) => ({
+    txHash: u.utxoRef.id.toString(),
+    outputIndex: u.utxoRef.index,
+    address: u.resolved.address.toString(),
+    value: valueView(u.resolved.value),
+  }));
+  utxoCache.set(cacheKey, { at: Date.now(), data });
   return data;
 }
 
@@ -216,6 +298,12 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
 
     case 'revokeDapp':
       return allowlist.remove(command.origin);
+
+    case 'getHistory':
+      return history();
+
+    case 'listUtxos':
+      return listUtxos();
 
     case 'getTxStatus': {
       const provider = await getProvider();

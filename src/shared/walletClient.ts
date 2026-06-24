@@ -11,6 +11,8 @@ import {
   type BuiltTx,
   type SubmitResult,
   type PendingApproval,
+  type HistoryEntry,
+  type UtxoView,
   type TxStatus,
 } from './internal';
 
@@ -47,5 +49,7 @@ export const wallet = {
     send<void>({ type: 'respondApproval', reqId, approved }),
   listConnectedDapps: () => send<string[]>({ type: 'listConnectedDapps' }),
   revokeDapp: (origin: string) => send<void>({ type: 'revokeDapp', origin }),
+  getHistory: () => send<HistoryEntry[]>({ type: 'getHistory' }),
+  listUtxos: () => send<UtxoView[]>({ type: 'listUtxos' }),
   getTxStatus: (txHash: string) => send<TxStatus>({ type: 'getTxStatus', txHash }),
 };

@@ -27,6 +27,8 @@ export interface ProviderConfig {
   blockfrostProjectId?: string | undefined;
   /** Optional Koios bearer token (kind='koios'). */
   koiosApiKey?: string | undefined;
+  /** Optional custom/self-hosted Koios base URL (kind='koios'); falls back to env, then the public default. */
+  koiosUrl?: string | undefined;
   /** Ogmios websocket URL, e.g. ws://localhost:1337 (kind='ogmios'). */
   ogmiosUrl?: string | undefined;
   timeoutMs?: number | undefined;
@@ -42,6 +44,8 @@ export function createProvider(config: ProviderConfig): IChainProvider {
     case 'koios':
       return new KoiosProvider(config.network, {
         apiKey: config.koiosApiKey,
+        // explicit setting wins; else env; else the public default (the KoiosProvider handles '').
+        baseUrl: config.koiosUrl || koiosUrlFromEnv(config.network),
         timeoutMs: config.timeoutMs,
       });
     case 'ogmios': {
@@ -62,4 +66,20 @@ function blockfrostKeyFromEnv(network: Network): string | undefined {
     case 'mainnet':
       return env.VITE_BLOCKFROST_PROJECT_ID_MAINNET;
   }
+}
+
+/**
+ * Self-hosted / custom Koios endpoint from Vite env (.env, gitignored): a per-network
+ * VITE_KOIOS_URL_<NET> wins, else the generic VITE_KOIOS_URL. Undefined → public Koios default.
+ */
+function koiosUrlFromEnv(network: Network): string | undefined {
+  const env = import.meta.env as Record<string, string | undefined>;
+  const perNetwork =
+    network === 'preview'
+      ? env.VITE_KOIOS_URL_PREVIEW
+      : network === 'preprod'
+        ? env.VITE_KOIOS_URL_PREPROD
+        : env.VITE_KOIOS_URL_MAINNET;
+  // `||` (not `??`): an empty string from an unset-but-present `.env` line must NOT win — fall back.
+  return perNetwork || env.VITE_KOIOS_URL || undefined;
 }

@@ -68,7 +68,7 @@ export function aggregateBalance(utxos: UTxO[]): TokenBundle {
 }
 
 /** UTF-8 decode an asset name iff it's non-empty printable ASCII; otherwise undefined (keep hex). */
-function decodeAssetName(hex: string): string | undefined {
+export function decodeAssetName(hex: string): string | undefined {
   if (!hex) return undefined;
   try {
     const s = new TextDecoder('utf-8', { fatal: true }).decode(fromHex(hex));

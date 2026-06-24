@@ -14,6 +14,7 @@ export async function getProvider(): Promise<IChainProvider> {
     ogmiosUrl: s.ogmiosUrl,
     blockfrostProjectId: s.blockfrostProjectIds?.[s.network],
     koiosApiKey: s.koiosApiKey,
+    koiosUrl: s.koiosUrl,
   };
   const sig = JSON.stringify(config);
   if (cached?.sig === sig) return cached.provider;

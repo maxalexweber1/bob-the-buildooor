@@ -42,6 +42,15 @@ export default defineManifest({
   // CIP-30 injection needs no host_permissions; <all_urls> on the content script suffices.
   permissions: ['storage', 'unlimitedStorage', 'idle', 'alarms'],
 
+  // Chain-data providers are fetched from the service worker. Without an explicit host grant, MV3
+  // subjects those fetches to CORS — Blockfrost sends `Access-Control-Allow-Origin: *` so it works,
+  // but Koios does not reliably, so its requests get blocked. Grant the PUBLIC provider hosts here so
+  // they work out of the box. A self-hosted/custom Koios or Ogmios host is requested at RUNTIME from
+  // the Provider settings (chrome.permissions.request on Save), keeping the default install minimal
+  // (CLAUDE.md §7). These are read-only data endpoints — no key material is ever sent to them.
+  host_permissions: ['https://*.koios.rest/*', 'https://*.blockfrost.io/*'],
+  optional_host_permissions: ['https://*/*', 'http://*/*'],
+
   content_security_policy: {
     // script-src 'self' (no wasm-unsafe-eval — pure-JS stack) is the core structural defense.
     // frame-ancestors 'none' hardens against clickjacking of the approval/unlock pages.
