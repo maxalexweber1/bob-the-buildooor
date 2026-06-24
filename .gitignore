@@ -30,3 +30,8 @@ Thumbs.db
 # Test / coverage
 coverage/
 .nyc_output/
+
+# Dev / proof tooling — not shipped (icon generator + testnet experiment scripts).
+# The generated product assets (src/assets/icon-*.png) ARE committed; the generator is not.
+scripts/
+_logo_src.png

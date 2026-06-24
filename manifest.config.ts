@@ -13,6 +13,11 @@ export default defineManifest({
 
   action: {
     default_popup: 'src/popup/index.html',
+    default_icon: {
+      '16': 'src/assets/icon-16.png',
+      '48': 'src/assets/icon-48.png',
+      '128': 'src/assets/icon-128.png',
+    },
   },
 
   // Onboarding/backup happens in a full tab (room to show the 24-word seed safely), not the popup.
@@ -38,13 +43,14 @@ export default defineManifest({
   permissions: ['storage', 'unlimitedStorage', 'idle', 'alarms'],
 
   content_security_policy: {
-    extension_pages: "script-src 'self'; object-src 'self';",
+    // script-src 'self' (no wasm-unsafe-eval — pure-JS stack) is the core structural defense.
+    // frame-ancestors 'none' hardens against clickjacking of the approval/unlock pages.
+    extension_pages: "script-src 'self'; object-src 'self'; frame-ancestors 'none';",
   },
 
   icons: {
-    // TODO(T7.5): real icons. Placeholder paths kept here for store-listing wiring.
-    // '16': 'src/assets/icon-16.png',
-    // '48': 'src/assets/icon-48.png',
-    // '128': 'src/assets/icon-128.png',
+    '16': 'src/assets/icon-16.png',
+    '48': 'src/assets/icon-48.png',
+    '128': 'src/assets/icon-128.png',
   },
 });

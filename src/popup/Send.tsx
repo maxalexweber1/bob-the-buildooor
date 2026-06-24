@@ -128,6 +128,10 @@ export function Send({ onBack }: { onBack: () => void }) {
       <h2 style={h2}>Send</h2>
       <label style={lbl}>Recipient address</label>
       <textarea value={to} onChange={(e) => setTo(e.target.value)} rows={3} spellCheck={false} style={{ ...field, fontFamily: 'monospace', resize: 'vertical' }} />
+      <p style={{ fontSize: 11, color: '#a0aec0', margin: '2px 0 6px' }}>
+        Double-check the address — clipboard malware can swap a pasted address. You'll confirm the full
+        address on the next screen.
+      </p>
       <label style={lbl}>Amount (₳)</label>
       <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.0" style={field} />
       {error && <p style={warn}>{error}</p>}

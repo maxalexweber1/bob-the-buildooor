@@ -154,14 +154,14 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
 - [x] **T5.1 — PlutusData JSON ↔ Data.** Datum/redeemer conversion; handle `constr` vs `constructor` key normalization.
   - files: `src/core/tx/plutusData.ts`
   - key APIs: `@harmoniclabs/plutus-data` `Data`, `dataFromCbor/dataToCbor`, `DataConstr`
-- [ ] **T5.2 — Collateral management.** Ensure ADA-only collateral UTxO (~5 ADA); collateral return.
+- [x] **T5.2 — Collateral management.** Ensure ADA-only collateral UTxO (~5 ADA); collateral return.
   - files: `src/core/tx/collateral.ts`
-- [ ] **T5.3 — 2-pass build with eval.** Pass 1 local CEK; Ogmios `evaluateTx` for authoritative ex-units; stamp redeemer budgets; recompute `scriptDataHash`.
+- [x] **T5.3 — 2-pass build with eval.** Pass 1 local CEK; Ogmios `evaluateTx` for authoritative ex-units; stamp redeemer budgets; recompute `scriptDataHash`.
   - files: `src/core/tx/plutusBuild.ts`, `src/background/provider/ogmios-kupo.ts`
   - key APIs: buildooor `getScriptDataHash`, cost models; provider `evaluateTx`
   - Reference: ODATANO `srv/blockchain/transaction-building/buildooor-tx.ts` (the canonical 2-pass impl).
   - done-when: a Plutus V3 spend + a mint both confirm on testnet.
-- [ ] **T5.4 — Reference inputs / inline datums / reference scripts (CIP-31/32/33).** Round-trip these fields in build + decoder.
+- [x] **T5.4 — Reference inputs / inline datums / reference scripts (CIP-31/32/33).** Round-trip these fields in build + decoder.
   - files: `src/core/tx/plutusBuild.ts`, `src/core/cbor/decodeTx.ts`
   - done-when: a ref-script spend works; approval screen renders script interactions.
 
@@ -171,7 +171,7 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
 
 ## M6 — Governance (CIP-95) & Hardware Wallets
 
-- [ ] **T6.1 — CIP-95 extension.** Negotiate via `enable({extensions:[{cip:95}]})`; `api.cip95.{getPubDRepKey,getRegisteredPubStakeKeys,getUnregisteredPubStakeKeys,signData}`.
+- [x] **T6.1 — CIP-95 extension.** Negotiate via `enable({extensions:[{cip:95}]})`; `api.cip95.{getPubDRepKey,getRegisteredPubStakeKeys,getUnregisteredPubStakeKeys,signData}`.
   - files: `src/background/cip30/cip95.ts`
   - key APIs: DRep key `…/3/0` (CIP-105)
 - [ ] **T6.2 — Conway certs/voting in signTx.** Witness vote-delegation, DRep reg/retire, voting/proposal procedures.
@@ -188,11 +188,11 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
 
 ## M7 — Hardening & Store Release
 
-- [ ] **T7.1 — Dependency sandboxing & supply-chain.** LavaMoat (or equivalent), pin deps, commit lockfile, scope/audit any publish tokens.
-- [ ] **T7.2 — Security review.** Threat-model pass: popup XSS (`textContent` only), origin enforcement, clickjacking, clipboard, blind-sign coverage.
-- [ ] **T7.3 — Test suite.** Unit (kdf/keyring/cose/decoder), integration (testnet send/dApp), e2e (Playwright loads unpacked ext).
-- [ ] **T7.4 — Firefox port.** `browser.*` polyfill; verify MAIN-world script-tag injection; HW via Trezor Bridge.
-- [ ] **T7.5 — Store listing.** Icons, screenshots, privacy disclosure, minimal permissions justification; CWS + AMO submissions.
+- [x] **T7.1 — Dependency sandboxing & supply-chain.** Install scripts blocked by default (`.npmrc ignore-scripts=true` + `@lavamoat/allow-scripts`, only esbuild allow-listed); deps exact-pinned; lockfile committed; 0 prod vulns. No publish tokens (not published).
+- [x] **T7.2 — Security review.** Threat-model pass recorded in `docs/SECURITY.md`: §1 invariants verified, blind-sign warning, CSPRNG, `frame-ancestors 'none'`, clipboard caution, `textContent`-only rendering.
+- [~] **T7.3 — Test suite.** Unit ✅ 20 files / 145 tests; integration ✅ preview proof scripts (`scripts/`); **e2e (Playwright) pending — needs a real browser, human-run.** See `docs/TESTING.md`.
+- [~] **T7.4 — Firefox port.** **Planned, not shipped — needs a Firefox build target + runtime.** Compat audit done; two blockers (event-page background, `browser.*` namespace) documented in `docs/FIREFOX.md`.
+- [~] **T7.5 — Store listing.** Icons ✅; listing copy, permission justifications & privacy policy ✅ (`docs/STORE.md`, `docs/PRIVACY.md`). **Screenshots + CWS/AMO submission pending — needs store accounts + a running build (human).**
 
 ---
 

@@ -16,28 +16,37 @@
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "allow-scripts": "allow-scripts run"
   },
+  "comment": "Exact-pinned versions (no ^): a key-handling extension minimizes supply-chain drift (CLAUDE.md §2). Bump deliberately. @harmoniclabs/buildooor: bump when the keepRelevant fix (PR#12) ships.",
   "dependencies": {
-    "@harmoniclabs/buildooor": "^0.2.6",
-    "@scure/bip39": "^1.3.0",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
-    "zustand": "^4.5.5"
+    "@harmoniclabs/buildooor": "0.2.7",
+    "@scure/bip39": "1.6.0",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "zustand": "4.5.7"
   },
   "devDependencies": {
-    "@crxjs/vite-plugin": "^2.0.0-beta.28",
-    "@types/chrome": "^0.0.270",
-    "@types/react": "^18.3.12",
-    "@types/react-dom": "^18.3.1",
-    "@typescript-eslint/eslint-plugin": "^8.13.0",
-    "@typescript-eslint/parser": "^8.13.0",
-    "@vitejs/plugin-react": "^4.3.3",
-    "eslint": "^8.57.1",
-    "eslint-plugin-react-hooks": "^4.6.2",
-    "prettier": "^3.3.3",
-    "typescript": "^5.6.3",
-    "vite": "^5.4.10",
-    "vitest": "^2.1.4"
+    "@crxjs/vite-plugin": "2.7.0",
+    "@lavamoat/allow-scripts": "5.0.2",
+    "@types/chrome": "0.0.270",
+    "@types/react": "18.3.31",
+    "@types/react-dom": "18.3.7",
+    "@typescript-eslint/eslint-plugin": "8.62.0",
+    "@typescript-eslint/parser": "8.62.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "eslint": "8.57.1",
+    "eslint-plugin-react-hooks": "4.6.2",
+    "prettier": "3.8.4",
+    "typescript": "5.9.3",
+    "vite": "5.4.21",
+    "vitest": "2.1.9"
+  },
+  "comment2": "Supply-chain (T7.1): install scripts are blocked by default via .npmrc (ignore-scripts=true). Only the vetted esbuild native-binary build is allow-listed. After `npm ci`, run `npm run allow-scripts`.",
+  "lavamoat": {
+    "allowScripts": {
+      "vite>esbuild#0.21.5": true
+    }
   }
 }
