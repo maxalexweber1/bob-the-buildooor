@@ -78,7 +78,26 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
       {summary.unresolvedInputs > 0 && (
         <p style={{ ...hint, color: '#c05621' }}>⚠ {summary.unresolvedInputs} input(s) could not be resolved for display.</p>
       )}
+      <TxFlagsWarning flags={summary.flags} />
     </div>
+  );
+}
+
+/** Surfaces tx components this build doesn't fully decode yet — so the user is never blind to them. */
+function TxFlagsWarning({ flags }: { flags: TxSummary['flags'] }) {
+  const present = [
+    flags.mint && 'token mint/burn',
+    flags.certificates && 'certificate(s)',
+    flags.withdrawals && 'reward withdrawal(s)',
+    flags.governance && 'governance action(s)',
+    flags.metadata && 'metadata',
+    flags.requiredSigners && 'extra required signer(s)',
+  ].filter(Boolean);
+  if (present.length === 0) return null;
+  return (
+    <p style={{ ...hint, color: '#9b2c2c', background: '#fff5f5', border: '1px solid #feb2b2', borderRadius: 6, padding: 8, marginTop: 8 }}>
+      ⚠ This transaction also contains: <b>{present.join(', ')}</b>. These are not yet decoded in detail
+      — only approve if you fully trust this site.</p>
   );
 }
 

@@ -57,6 +57,13 @@ describe('summarizeTx (T3.3 — decode for approval)', () => {
     expect(change?.address).toBe(ownAddr);
     expect(summary.fee).toBe(tx.body.fee.toString());
   });
+
+  it('flags are all false for a plain ADA payment (no mint/cert/gov)', () => {
+    const ctx = ctxWith(10_000_000n);
+    const tx = buildSend(ctx, { toAddress: RECIPIENT, lovelace: 3_000_000n });
+    const { flags } = summarizeTx(tx, ctx.utxos, new Set([ownAddr]));
+    expect(Object.values(flags).every((v) => v === false)).toBe(true);
+  });
 });
 
 describe('signTxCbor (T3.2)', () => {

@@ -10,12 +10,27 @@ export interface TxIO {
   value: TokenBundle;
 }
 
+/**
+ * Presence flags for tx-body components we don't fully decode yet (mint, certs, governance, …). The
+ * approval UI WARNS when any is set, so a malicious/buggy dApp can't slip a mint or certificate past
+ * the user just because we only render inputs/outputs/fee (CLAUDE.md §1.5 — never blind-sign).
+ */
+export interface TxFlags {
+  mint: boolean;
+  certificates: boolean;
+  withdrawals: boolean;
+  metadata: boolean;
+  governance: boolean;
+  requiredSigners: boolean;
+}
+
 export interface TxSummary {
   inputs: TxIO[];
   outputs: Array<TxIO & { isOwn: boolean }>;
   /** Inputs we couldn't resolve to a known UTxO (shown so nothing is hidden from the user). */
   unresolvedInputs: number;
   fee: string;
+  flags: TxFlags;
 }
 
 /**
@@ -39,5 +54,22 @@ export function summarizeTx(tx: Tx, resolvedInputs: UTxO[], ownAddresses: Readon
     return { address, value: valueView(o.value), isOwn: ownAddresses.has(address) };
   });
 
-  return { inputs, outputs, unresolvedInputs, fee: tx.body.fee.toString() };
+  const b = tx.body;
+  const flags: TxFlags = {
+    mint: present(b.mint),
+    certificates: present(b.certs),
+    withdrawals: present(b.withdrawals),
+    metadata: present(b.auxDataHash),
+    governance: present(b.votingProcedures) || present(b.proposalProcedures),
+    requiredSigners: present(b.requiredSigners),
+  };
+
+  return { inputs, outputs, unresolvedInputs, fee: tx.body.fee.toString(), flags };
+}
+
+/** A tx-body field is "present" if set and (for collections) non-empty. Over-warns rather than hide. */
+function present(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  if (Array.isArray(v)) return v.length > 0;
+  return true;
 }
