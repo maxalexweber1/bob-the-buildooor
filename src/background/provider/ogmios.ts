@@ -5,8 +5,8 @@
 // This is also the stepping stone to a local full node: point `ogmiosUrl` at `ws://localhost:1337`
 // for a local cardano-node+Ogmios today, and a future GerolamoProvider slots in behind IChainProvider
 // the same way (see IChainProvider.ts).
-import type { CanResolveToUTxO, GenesisInfos, ProtocolParameters, UTxO, CostModels } from '@harmoniclabs/buildooor';
-import { forceTxOutRef, toCostModelV1, toCostModelV2, toCostModelV3 } from '@harmoniclabs/buildooor';
+import type { CanResolveToUTxO, GenesisInfos, ProtocolParameters, UTxO } from '@harmoniclabs/buildooor';
+import { forceTxOutRef } from '@harmoniclabs/buildooor';
 import {
   ProviderError,
   ProviderTimeoutError,
@@ -16,7 +16,7 @@ import {
   type ScriptEvalResult,
 } from './IChainProvider';
 import { DEFAULT_TIMEOUT_MS, genesisInfosFor } from './network';
-import { mergeProtocolParameters, ogmiosValueToUnits, parseRatio, toUtxo } from './mappers';
+import { costModelsFromArrays, mergeProtocolParameters, ogmiosValueToUnits, parseRatio, toUtxo } from './mappers';
 
 export type WebSocketFactory = (url: string) => WebSocket;
 
@@ -199,7 +199,15 @@ export class OgmiosProvider implements IChainProvider {
       protocolVersion: { major: p.version?.major ?? 0, minor: p.version?.minor ?? 0 },
       // Real Plutus cost models — required for a correct scriptDataHash (verified live: a Plutus V3
       // spend built with these passes Ogmios evaluateTransaction without PPViewHashesDontMatch).
-      ...(p.plutusCostModels ? { costModels: ogmiosCostModels(p.plutusCostModels) } : {}),
+      ...(p.plutusCostModels
+        ? {
+            costModels: costModelsFromArrays({
+              v1: p.plutusCostModels['plutus:v1'],
+              v2: p.plutusCostModels['plutus:v2'],
+              v3: p.plutusCostModels['plutus:v3'],
+            }),
+          }
+        : {}),
     });
   }
 
@@ -226,17 +234,6 @@ export class OgmiosProvider implements IChainProvider {
   close(): void {
     this.client.close();
   }
-}
-
-/** Ogmios `plutusCostModels` ({ 'plutus:v1': number[], … }) → buildooor `CostModels`. */
-function ogmiosCostModels(cm: OgmiosCostModels): CostModels {
-  // The node returns a flat number[] for each language; buildooor types these as fixed-length tuples.
-  // The runtime value is exactly the ledger's cost-model vector — cast to each fn's own param type.
-  const out: CostModels = {};
-  if (cm['plutus:v1']) out.PlutusScriptV1 = toCostModelV1(cm['plutus:v1'] as Parameters<typeof toCostModelV1>[0]);
-  if (cm['plutus:v2']) out.PlutusScriptV2 = toCostModelV2(cm['plutus:v2'] as Parameters<typeof toCostModelV2>[0]);
-  if (cm['plutus:v3']) out.PlutusScriptV3 = toCostModelV3(cm['plutus:v3'] as Parameters<typeof toCostModelV3>[0]);
-  return out;
 }
 
 interface OgmiosCostModels {

@@ -4,7 +4,7 @@ import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolP
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
 import { type ChainTip, type IChainProvider, type Network } from './IChainProvider';
 import { BLOCKFROST_BASE_URL, DEFAULT_TIMEOUT_MS, fetchJson, genesisInfosFor } from './network';
-import { mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
+import { costModelsFromArrays, mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
 
 interface BfUtxo {
   tx_hash: string;
@@ -46,6 +46,7 @@ interface BfParams {
   max_block_ex_steps: string;
   protocol_major_ver: number;
   protocol_minor_ver: number;
+  cost_models_raw?: { PlutusV1?: number[]; PlutusV2?: number[]; PlutusV3?: number[] } | null;
 }
 
 export class BlockfrostProvider implements IChainProvider {
@@ -133,6 +134,10 @@ export class BlockfrostProvider implements IChainProvider {
       maxTxExecutionUnits: { memory: Number(p.max_tx_ex_mem), steps: Number(p.max_tx_ex_steps) },
       maxBlockExecutionUnits: { memory: Number(p.max_block_ex_mem), steps: Number(p.max_block_ex_steps) },
       protocolVersion: { major: p.protocol_major_ver, minor: p.protocol_minor_ver },
+      // Real Plutus cost models — required for a correct scriptDataHash.
+      ...(p.cost_models_raw
+        ? { costModels: costModelsFromArrays({ v1: p.cost_models_raw.PlutusV1, v2: p.cost_models_raw.PlutusV2, v3: p.cost_models_raw.PlutusV3 }) }
+        : {}),
     });
   }
 

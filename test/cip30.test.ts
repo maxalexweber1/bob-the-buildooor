@@ -131,4 +131,16 @@ describe('handleCip30 — read methods (T4.2)', () => {
       handleCip30('signData', [foreignAddrHex, toHex(utf8ToBytes('hi'))], ORIGIN),
     ).rejects.toMatchObject({ code: 2 });
   });
+
+  it('cip95.getPubDRepKey returns a 32-byte hex DRep key', async () => {
+    const hex = (await handleCip30('cip95.getPubDRepKey', [], ORIGIN)) as string;
+    expect(hex).toMatch(/^[0-9a-f]{64}$/); // 32 bytes
+  });
+
+  it('cip95.get{Un}registeredPubStakeKeys: stake key reported unregistered for a fresh wallet', async () => {
+    expect(await handleCip30('cip95.getRegisteredPubStakeKeys', [], ORIGIN)).toEqual([]);
+    const unreg = (await handleCip30('cip95.getUnregisteredPubStakeKeys', [], ORIGIN)) as string[];
+    expect(unreg).toHaveLength(1);
+    expect(unreg[0]).toMatch(/^[0-9a-f]{64}$/);
+  });
 });

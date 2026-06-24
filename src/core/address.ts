@@ -67,6 +67,16 @@ export function rewardAddress(keys: AccountKeys, network: Network): StakeAddress
   return new StakeAddress({ network, credentials: new StakeKeyHash(keys.stakeKeyHash), type: 'stakeKey' });
 }
 
+/** Raw Ed25519 DRep public key — CIP-105 path `…/3/0`, used by CIP-95 getPubDRepKey. */
+export function drepPublicKey(keys: AccountKeys): Uint8Array {
+  return deriveFromAccount(keys.accountKey, Role.DRep, 0).public().toPubKeyBytes();
+}
+
+/** Raw Ed25519 stake public key — `…/2/0`, used by CIP-95 get{Un}registeredPubStakeKeys. */
+export function stakePublicKey(keys: AccountKeys): Uint8Array {
+  return deriveFromAccount(keys.accountKey, Role.Staking, 0).public().toPubKeyBytes();
+}
+
 /** Base address for `index` on the given `role` chain, reusing a precomputed `AccountKeys`. */
 export function baseAddressFrom(
   keys: AccountKeys,

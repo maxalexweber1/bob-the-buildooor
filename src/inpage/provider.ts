@@ -45,6 +45,14 @@ function fullApi() {
     signData: (addr: string, payload: string) =>
       request<{ signature: string; key: string }>('signData', addr, payload),
     submitTx: (tx: string) => request<string>('submitTx', tx),
+    // CIP-95 governance extension.
+    cip95: {
+      getPubDRepKey: () => request<string>('cip95.getPubDRepKey'),
+      getRegisteredPubStakeKeys: () => request<string[]>('cip95.getRegisteredPubStakeKeys'),
+      getUnregisteredPubStakeKeys: () => request<string[]>('cip95.getUnregisteredPubStakeKeys'),
+      signData: (addr: string, payload: string) =>
+        request<{ signature: string; key: string }>('cip95.signData', addr, payload),
+    },
     experimental: {},
   };
 }
@@ -53,7 +61,7 @@ const cardanoApi = {
   apiVersion: '1',
   name: WALLET_NAME,
   icon: 'data:image/svg+xml;base64,', // TODO(T7.5)
-  supportedExtensions: [] as Array<{ cip: number }>,
+  supportedExtensions: [{ cip: 95 }] as Array<{ cip: number }>,
   isEnabled: () => request<boolean>('isEnabled'),
   enable: async () => {
     await request<boolean>('enable'); // consent gate (throws CIP-30 error if declined)

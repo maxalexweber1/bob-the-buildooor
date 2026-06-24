@@ -6,7 +6,7 @@ import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolP
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
 import { type ChainTip, type IChainProvider, type Network } from './IChainProvider';
 import { DEFAULT_TIMEOUT_MS, KOIOS_BASE_URL, fetchJson, genesisInfosFor } from './network';
-import { mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
+import { costModelsFromArrays, mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
 
 interface KoiosUtxoRow {
   tx_hash: string;
@@ -32,6 +32,7 @@ interface KoiosCliParams {
   maxTxExecutionUnits: { memory: number; steps: number };
   maxBlockExecutionUnits: { memory: number; steps: number };
   protocolVersion: { major: number; minor: number };
+  costModels?: { PlutusV1?: number[]; PlutusV2?: number[]; PlutusV3?: number[] } | null;
 }
 
 function rowToRaw(row: KoiosUtxoRow, fallbackAddress: string): { txHash: string; outputIndex: number; address: string; amount: AmountUnit[] } {
@@ -112,6 +113,10 @@ export class KoiosProvider implements IChainProvider {
       maxTxExecutionUnits: p.maxTxExecutionUnits,
       maxBlockExecutionUnits: p.maxBlockExecutionUnits,
       protocolVersion: p.protocolVersion,
+      // Real Plutus cost models — required for a correct scriptDataHash.
+      ...(p.costModels
+        ? { costModels: costModelsFromArrays({ v1: p.costModels.PlutusV1, v2: p.costModels.PlutusV2, v3: p.costModels.PlutusV3 }) }
+        : {}),
     });
   }
 

@@ -23,7 +23,15 @@ import { settings, type WalletSettings } from '../settings';
 import { getProvider } from '../walletProvider';
 import { touchAutoLock } from '../autolock';
 import { mnemonicToRoot, deriveKey, Role } from '../../core/keys';
-import { accountKeys, baseAddressFrom, bech32Network, rewardAddress, type AccountKeys } from '../../core/address';
+import {
+  accountKeys,
+  baseAddressFrom,
+  bech32Network,
+  rewardAddress,
+  drepPublicKey,
+  stakePublicKey,
+  type AccountKeys,
+} from '../../core/address';
 import { summarizeTx } from '../../core/tx/summary';
 import { valueView } from '../../core/balance';
 import { buildCoseSign1 } from '../../core/cose/sign';
@@ -122,6 +130,18 @@ async function authedMethod(method: string, params: unknown[], origin: string): 
     case 'signData':
       return signData(root, s, provider, keys, origin, params[0] as string, params[1] as string);
 
+    // ---- CIP-95 (Conway governance) ----
+    case 'cip95.getPubDRepKey':
+      return toHex(drepPublicKey(keys));
+    case 'cip95.getRegisteredPubStakeKeys':
+      // TODO(M6): query on-chain stake registration. Until then, none reported as registered.
+      return [];
+    case 'cip95.getUnregisteredPubStakeKeys':
+      return [toHex(stakePublicKey(keys))];
+    case 'cip95.signData':
+      // TODO(M6): COSE-sign with the DRep key for a DRep credential / vote auth.
+      throw apiError(APIErrorCode.InternalError, 'cip95.signData not yet implemented');
+
     default:
       throw apiError(APIErrorCode.InvalidRequest, `unknown method: ${method}`);
   }
@@ -174,6 +194,17 @@ async function signTx(
     throw new Cip30Error(TxSignErrorCode.ProofGeneration, 'wallet owns none of the inputs');
   }
   const signingKeys = [...signerRefs.values()].map((o) => deriveKey(root, 0, o.role, o.index));
+
+  // Conway (CIP-95): certificates, governance actions and reward withdrawals are authorized by the
+  // STAKE (…/2/0) and DRep (…/3/0) keys, not a payment key. Offer them when the tx contains such
+  // components — buildooor's signWith only adds a witness for keys the tx actually requires (T6.2).
+  // NOTE: this path is implemented but UNVERIFIED on-chain: the installed buildooor's tx layer does
+  // not yet recognize Conway governance certs (`isCertificate(CertVoteDeleg)` is false), so a vote-
+  // delegation/DRep tx can't be built or round-tripped to test it here. Revisit when buildooor adds
+  // Conway-governance-cert support (track alongside the keepRelevant PR).
+  if (summary.flags.certificates || summary.flags.governance || summary.flags.withdrawals) {
+    signingKeys.push(deriveKey(root, 0, Role.Staking, 0), deriveKey(root, 0, Role.DRep, 0));
+  }
   return signTxWitnessSet(txCbor, signingKeys);
 }
 

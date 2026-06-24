@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { Address } from '@harmoniclabs/buildooor';
 import { mnemonicToRoot } from '../src/core/keys';
 import { mnemonicToEntropy } from '../src/core/mnemonic';
-import { accountKeys, baseAddress, baseAddressFrom, keyHash28, paymentCredential, rewardAddress, stakeCredential } from '../src/core/address';
+import { accountKeys, baseAddress, baseAddressFrom, drepPublicKey, keyHash28, paymentCredential, rewardAddress, stakeCredential, stakePublicKey } from '../src/core/address';
 import { Role } from '../src/core/keys';
 
 // All-zero 256-bit entropy → canonical 24-word phrase. A fixed, network-free derivation vector.
@@ -77,5 +77,16 @@ describe('credential helpers', () => {
     const keys = accountKeys(root, 0);
     expect(rewardAddress(keys, 'testnet').toString().startsWith('stake_test1')).toBe(true);
     expect(rewardAddress(keys, 'mainnet').toString().startsWith('stake1')).toBe(true);
+  });
+
+  it('DRep (…/3/0) and stake (…/2/0) public keys are 32 bytes and distinct (CIP-95/CIP-105)', () => {
+    const keys = accountKeys(root, 0);
+    const drep = drepPublicKey(keys);
+    const stake = stakePublicKey(keys);
+    expect(drep.length).toBe(32);
+    expect(stake.length).toBe(32);
+    // distinct from each other and from the payment key (different derivation roles)
+    const hex = (u: Uint8Array) => Buffer.from(u).toString('hex');
+    expect(new Set([hex(drep), hex(stake), hex(stakeCredential(root, 0).toCborBytes())]).size).toBe(3);
   });
 });

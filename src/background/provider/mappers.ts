@@ -1,7 +1,17 @@
 // Shared response→buildooor mappers (T2.2/T2.3). Both Blockfrost and Ogmios normalize their UTxO
 // payloads to a `{ unit, quantity }[]` amount list, then we build a buildooor `UTxO` from it.
 // Adapted from ODATANO's backend mappers (the value/ratio edge cases were learned there).
-import { Address, UTxO, Value, defaultProtocolParameters, type ProtocolParameters } from '@harmoniclabs/buildooor';
+import {
+  Address,
+  UTxO,
+  Value,
+  defaultProtocolParameters,
+  toCostModelV1,
+  toCostModelV2,
+  toCostModelV3,
+  type CostModels,
+  type ProtocolParameters,
+} from '@harmoniclabs/buildooor';
 
 /** Blockfrost-style amount entry; also the normalized form we convert Ogmios values into. */
 export interface AmountUnit {
@@ -72,4 +82,24 @@ export function parseRatio(ratio: string | number | undefined | null): number {
  */
 export function mergeProtocolParameters(overrides: Partial<ProtocolParameters>): ProtocolParameters {
   return { ...defaultProtocolParameters, ...overrides };
+}
+
+/**
+ * Map per-language cost-model vectors (the ledger's flat number[] for each Plutus version) into
+ * buildooor `CostModels`. Required for a correct `scriptDataHash` — the buildooor default cost models
+ * do NOT match the chain (verified live: a Plutus tx built with these passes Ogmios evaluateTransaction
+ * without PPViewHashesDontMatch). All providers expose the same vectors under different keys:
+ *   Ogmios `plutus:v1/v2/v3`, Blockfrost `cost_models_raw.PlutusV1/V2/V3`, Koios `costModels.PlutusV1…`.
+ * The node returns a flat number[]; buildooor types these as fixed-length tuples — cast to each fn's param.
+ */
+export function costModelsFromArrays(v: {
+  v1?: number[] | undefined;
+  v2?: number[] | undefined;
+  v3?: number[] | undefined;
+}): CostModels {
+  const out: CostModels = {};
+  if (v.v1) out.PlutusScriptV1 = toCostModelV1(v.v1 as Parameters<typeof toCostModelV1>[0]);
+  if (v.v2) out.PlutusScriptV2 = toCostModelV2(v.v2 as Parameters<typeof toCostModelV2>[0]);
+  if (v.v3) out.PlutusScriptV3 = toCostModelV3(v.v3 as Parameters<typeof toCostModelV3>[0]);
+  return out;
 }

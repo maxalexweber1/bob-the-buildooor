@@ -20,7 +20,12 @@ export type RpcMethod =
   | 'getCollateral'
   | 'signTx'
   | 'signData'
-  | 'submitTx';
+  | 'submitTx'
+  // CIP-95 (Conway governance) extension — api.cip95.*
+  | 'cip95.getPubDRepKey'
+  | 'cip95.getRegisteredPubStakeKeys'
+  | 'cip95.getUnregisteredPubStakeKeys'
+  | 'cip95.signData';
 
 export interface RpcRequest {
   target: typeof TARGET_CONTENT;

@@ -10,6 +10,7 @@ import {
   type Tx,
   type UTxO,
 } from '@harmoniclabs/buildooor';
+import { selectInputs } from './coinSelect';
 
 export interface BuildContext {
   protocolParameters: ProtocolParameters;
@@ -39,11 +40,12 @@ export function buildSend(ctx: BuildContext, out: SendOutput): Tx {
   ];
   const outputValue = Value.fromUnits(units);
 
-  const inputs = tb.keepRelevant(outputValue, ctx.utxos.map((utxo) => ({ utxo })));
-  if (inputs.length === 0) throw new Error('insufficient funds');
+  // Our own coin selection (buildooor's keepRelevant is broken — see coinSelect.ts).
+  const assets = new Map((out.assets ?? []).map((a) => [a.unit, a.quantity]));
+  const selected = selectInputs(ctx.utxos, { lovelace: out.lovelace, assets });
 
   return tb.buildSync({
-    inputs,
+    inputs: selected.map((utxo) => ({ utxo })),
     outputs: [{ address: Address.fromString(out.toAddress), value: outputValue }],
     changeAddress: ctx.changeAddress,
   });
