@@ -266,9 +266,12 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
 }
 
 function pickTwo(n: number): [number, number] {
-  const a = Math.floor(Math.random() * n);
-  let b = Math.floor(Math.random() * n);
-  while (b === a) b = Math.floor(Math.random() * n);
+  // CSPRNG even though this only picks which backup words to confirm (not key material) — a wallet
+  // codebase should never contain Math.random, so nothing weak can creep into a security path later.
+  const rand = () => (crypto.getRandomValues(new Uint32Array(1))[0] ?? 0) % n;
+  const a = rand();
+  let b = rand();
+  while (b === a) b = rand();
   return [a, b];
 }
 
