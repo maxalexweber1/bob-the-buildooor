@@ -32,6 +32,15 @@ export interface SendOutput {
 export function buildSend(ctx: BuildContext, out: SendOutput): Tx {
   if (out.lovelace <= 0n) throw new Error('amount must be greater than zero');
 
+  // Reject a recipient on the wrong network (e.g. a mainnet `addr1…` while the wallet is on testnet).
+  // bech32 alone doesn't catch this; without the check the tx would build and the user could send to
+  // an address they can never reach on this network (review #-nit, fund safety).
+  const recipient = Address.fromString(out.toAddress);
+  const ownNetwork = Address.fromString(ctx.changeAddress).network;
+  if (recipient.network !== ownNetwork) {
+    throw new Error(`wrong network: recipient is a ${recipient.network} address but the wallet is on ${ownNetwork}`);
+  }
+
   const tb = new TxBuilder(ctx.protocolParameters, ctx.genesisInfos);
 
   const units = [
@@ -46,7 +55,7 @@ export function buildSend(ctx: BuildContext, out: SendOutput): Tx {
 
   return tb.buildSync({
     inputs: selected.map((utxo) => ({ utxo })),
-    outputs: [{ address: Address.fromString(out.toAddress), value: outputValue }],
+    outputs: [{ address: recipient, value: outputValue }],
     changeAddress: ctx.changeAddress,
   });
 }

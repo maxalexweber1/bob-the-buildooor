@@ -17,12 +17,16 @@ export async function getProvider(): Promise<IChainProvider> {
   };
   const sig = JSON.stringify(config);
   if (cached?.sig === sig) return cached.provider;
+  // Release the previous provider's long-lived resources (e.g. an Ogmios WebSocket) before replacing
+  // it — otherwise every settings/network change leaks an open socket with live handlers (review #5).
+  cached?.provider.close?.();
   const provider = createProvider(config);
   cached = { sig, provider };
   return provider;
 }
 
-/** Drop the cached provider (e.g. after a settings change). */
+/** Drop the cached provider (e.g. after a settings change), closing any open connection. */
 export function clearProviderCache(): void {
+  cached?.provider.close?.();
   cached = null;
 }

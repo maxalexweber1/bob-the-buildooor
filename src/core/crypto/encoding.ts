@@ -43,8 +43,10 @@ export function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 export function toHex(bytes: Uint8Array): string {
   let s = '';
-  for (let i = 0; i < bytes.length; i++) {
-    s += (bytes[i] ?? 0).toString(16).padStart(2, '0');
+  // Iterate by value so each byte is a definite `number` — no `?? 0` coercion that could silently
+  // emit "00" for an out-of-range index (review #-nit).
+  for (const b of bytes) {
+    s += b.toString(16).padStart(2, '0');
   }
   return s;
 }

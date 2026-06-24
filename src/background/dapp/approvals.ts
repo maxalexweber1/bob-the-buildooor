@@ -15,7 +15,14 @@ export interface PendingApproval {
   payload?: unknown;
 }
 
-export const PENDING_APPROVAL_KEY = 'bob:pendingApproval';
+// Each pending approval is stored under its OWN reqId-scoped key, NOT a single shared key. This is a
+// security boundary: a second gated request (e.g. a malicious dApp's signTx) must not be able to
+// overwrite a legitimate pending request, and a popup window must only ever read/answer the exact
+// request it was opened for. The window carries its reqId in the URL hash; the popup reads precisely
+// that record (see Connect.tsx). Without per-reqId keying, two overlapping prompts race on one key —
+// the legitimate one gets dropped and the attacker's can become the visible one (security review #1).
+const APPROVAL_KEY_PREFIX = 'bob:pendingApproval:';
+const approvalKey = (reqId: string): string => `${APPROVAL_KEY_PREFIX}${reqId}`;
 
 interface Waiter {
   resolve: (approved: boolean) => void;
@@ -30,10 +37,11 @@ export async function requestApproval(
   payload?: unknown,
 ): Promise<boolean> {
   const reqId = crypto.randomUUID();
-  await chromeSessionStore.set(PENDING_APPROVAL_KEY, { reqId, type, origin, payload } satisfies PendingApproval);
+  await chromeSessionStore.set(approvalKey(reqId), { reqId, type, origin, payload } satisfies PendingApproval);
 
+  // reqId travels in the hash so the popup loads exactly this request, never "the latest".
   const win = await chrome.windows.create({
-    url: chrome.runtime.getURL('src/popup/index.html#approve'),
+    url: chrome.runtime.getURL(`src/popup/index.html#approve?req=${reqId}`),
     type: 'popup',
     width: 400,
     height: 620,
@@ -45,8 +53,9 @@ export async function requestApproval(
   });
 }
 
-export async function getPendingApproval(): Promise<PendingApproval | null> {
-  return (await chromeSessionStore.get<PendingApproval>(PENDING_APPROVAL_KEY)) ?? null;
+export async function getPendingApproval(reqId: string): Promise<PendingApproval | null> {
+  if (!reqId) return null;
+  return (await chromeSessionStore.get<PendingApproval>(approvalKey(reqId))) ?? null;
 }
 
 export async function respondApproval(reqId: string, approved: boolean): Promise<void> {
@@ -55,7 +64,8 @@ export async function respondApproval(reqId: string, approved: boolean): Promise
     waiters.delete(reqId);
     w.resolve(approved);
   }
-  await chromeSessionStore.remove(PENDING_APPROVAL_KEY);
+  // Only clears THIS request's record — other concurrent prompts are untouched.
+  await chromeSessionStore.remove(approvalKey(reqId));
 }
 
 /** Called from a chrome.windows.onRemoved listener: a closed prompt counts as a decline. */
@@ -64,7 +74,7 @@ export function onApprovalWindowClosed(windowId: number): void {
     if (w.windowId === windowId) {
       waiters.delete(reqId);
       w.resolve(false);
-      void chromeSessionStore.remove(PENDING_APPROVAL_KEY);
+      void chromeSessionStore.remove(approvalKey(reqId));
     }
   }
 }

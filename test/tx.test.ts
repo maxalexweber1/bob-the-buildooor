@@ -38,6 +38,13 @@ describe('buildSend (T3.1)', () => {
   it('rejects insufficient funds', () => {
     expect(() => buildSend(ctxWith(2_000_000n), { toAddress: RECIPIENT, lovelace: 100_000_000n })).toThrow();
   });
+
+  it('rejects a recipient on the wrong network (mainnet address, testnet wallet)', () => {
+    const mainnetAddr = baseAddress(root, 'mainnet', 0, 0);
+    expect(() =>
+      buildSend(ctxWith(10_000_000n), { toAddress: mainnetAddr, lovelace: 3_000_000n }),
+    ).toThrow(/network/);
+  });
 });
 
 describe('summarizeTx (T3.3 — decode for approval)', () => {

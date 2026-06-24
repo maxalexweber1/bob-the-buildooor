@@ -15,16 +15,23 @@ export interface SelectionTarget {
   assets?: Map<string, bigint>;
 }
 
-/** Default headroom over the requested lovelace: covers fee + min-ADA of a change output (~2 ADA). */
+/** Base headroom over the requested lovelace: covers the fee + min-ADA of a change output (~2 ADA). */
 export const DEFAULT_FEE_BUFFER = 2_000_000n;
+
+/**
+ * Extra headroom added PER selected input. A bigger input set means a bigger tx and a higher fee, so a
+ * flat buffer can under-fund a many-input / multi-asset send — which then fails deep inside the builder
+ * instead of here (review #-low). Scaling the requirement by input count keeps enough margin; any
+ * surplus simply returns to the change output.
+ */
+export const PER_INPUT_BUFFER = 100_000n;
 
 export function selectInputs(
   utxos: UTxO[],
   target: SelectionTarget,
   feeBuffer: bigint = DEFAULT_FEE_BUFFER,
 ): UTxO[] {
-  const need = new Map<string, bigint>([['lovelace', target.lovelace + feeBuffer]]);
-  for (const [unit, qty] of target.assets ?? []) need.set(unit, qty);
+  const assetNeed = new Map<string, bigint>(target.assets ?? []);
 
   // Largest lovelace first — minimizes input count (and thus tx size & fee) vs grabbing everything.
   const sorted = [...utxos].sort((a, b) =>
@@ -32,9 +39,13 @@ export function selectInputs(
   );
 
   const have = new Map<string, bigint>();
-  const covered = () => [...need].every(([unit, qty]) => (have.get(unit) ?? 0n) >= qty);
-
   const picked: UTxO[] = [];
+  // The lovelace bar rises as inputs accrue, so each picked input also covers its own marginal fee.
+  const lovelaceNeed = (): bigint => target.lovelace + feeBuffer + PER_INPUT_BUFFER * BigInt(picked.length);
+  const covered = (): boolean =>
+    (have.get('lovelace') ?? 0n) >= lovelaceNeed() &&
+    [...assetNeed].every(([unit, qty]) => (have.get(unit) ?? 0n) >= qty);
+
   for (const u of sorted) {
     if (covered()) break;
     picked.push(u);

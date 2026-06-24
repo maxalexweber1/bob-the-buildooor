@@ -35,4 +35,14 @@ describe('selectInputs (own coin selection; replaces broken keepRelevant)', () =
     const utxos = [utxo(0, [{ unit: 'lovelace', quantity: '2000000' }])];
     expect(() => selectInputs(utxos, { lovelace: 100_000_000n })).toThrow(/insufficient/);
   });
+
+  it('scales headroom with input count — many small UTxOs keep a per-input margin (review #-low)', () => {
+    // Ten 2-ADA UTxOs; need 12 ADA + 2 ADA base buffer + 0.1 ADA/input. Selection must cover the
+    // rising bar, so the picked sum comfortably exceeds target + base buffer (margin for the fee).
+    const utxos = Array.from({ length: 10 }, (_, i) => utxo(i, [{ unit: 'lovelace', quantity: '2000000' }]));
+    const picked = selectInputs(utxos, { lovelace: 12_000_000n }, 2_000_000n);
+    const sum = picked.reduce((acc, u) => acc + u.resolved.value.lovelaces, 0n);
+    const dynamicNeed = 12_000_000n + 2_000_000n + 100_000n * BigInt(picked.length);
+    expect(sum).toBeGreaterThanOrEqual(dynamicNeed);
+  });
 });

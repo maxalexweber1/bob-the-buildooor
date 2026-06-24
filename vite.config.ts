@@ -15,7 +15,9 @@ export default defineConfig({
   },
   build: {
     target: 'es2022',
-    sourcemap: true,
+    // No source maps in the published build — a key-handling wallet shouldn't ship readable source to
+    // dist/ (review #-low). Flip to 'inline'/true locally if you need to debug a production build.
+    sourcemap: false,
     rollupOptions: {
       output: {
         // Chrome rejects extension files whose names start with "_" (reserved). Rollup names the

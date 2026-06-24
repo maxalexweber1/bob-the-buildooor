@@ -247,6 +247,22 @@ describe('OgmiosProvider (fake WebSocket JSON-RPC)', () => {
     );
     expect(await p2.getTip()).toEqual({ slot: 0, hash: '', height: 0 });
   });
+
+  it('rejects (not hangs) when the WebSocket never opens — connect timeout (review #5)', async () => {
+    vi.useFakeTimers();
+    try {
+      // A socket that accepts construction but never fires onopen/onerror/onclose.
+      const neverOpen = (u: string): WebSocket =>
+        ({ url: u, onopen: null, onmessage: null, onclose: null, onerror: null, readyState: 0, send() {}, close() {} }) as unknown as WebSocket;
+      const p = new OgmiosProvider('preview', 'ws://localhost:1337', { timeoutMs: 5000, wsFactory: neverOpen });
+      const pending = p.getProtocolParameters();
+      const assertion = expect(pending).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('KoiosProvider (mocked fetch)', () => {

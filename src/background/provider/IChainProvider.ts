@@ -56,6 +56,12 @@ export interface IChainProvider {
   getTip?(): Promise<ChainTip>;
   /** Has this tx hash been included on-chain? Drives post-submit confirmation polling (needs history). */
   isConfirmed?(txHash: string): Promise<boolean>;
+
+  /**
+   * Release long-lived resources (e.g. the Ogmios WebSocket). Stateless HTTP providers omit it. The
+   * provider cache calls this before discarding a provider so sockets don't leak on settings changes.
+   */
+  close?(): void;
 }
 
 // ---- Errors ----

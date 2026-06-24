@@ -48,11 +48,25 @@ export class OgmiosClient {
     if (this.connecting) return this.connecting;
     this.connecting = new Promise<WebSocket>((resolve, reject) => {
       const ws = this.wsFactory(this.url);
+      // Bound the OPEN handshake: if onopen/onerror/onclose never fire (server accepts the TCP but
+      // never the WS), the caller would otherwise hang until the service worker is killed (review #5).
+      const openTimer = setTimeout(() => {
+        try {
+          ws.close();
+        } catch {
+          /* best effort */
+        }
+        reject(new ProviderTimeoutError(`ogmios: connect to ${this.url} timed out after ${this.timeoutMs}ms`));
+      }, this.timeoutMs);
       ws.onopen = () => {
+        clearTimeout(openTimer);
         this.ws = ws;
         resolve(ws);
       };
-      ws.onerror = () => reject(new ProviderError(`ogmios: websocket error connecting to ${this.url}`));
+      ws.onerror = () => {
+        clearTimeout(openTimer);
+        reject(new ProviderError(`ogmios: websocket error connecting to ${this.url}`));
+      };
       ws.onclose = () => {
         this.ws = null;
         this.failAll(new ProviderError('ogmios: socket closed'));

@@ -100,12 +100,19 @@ export function Send({ onBack }: { onBack: () => void }) {
           <span>Network fee</span>
           <span>{formatAda(built.summary.fee)} ₳</span>
         </div>
-        {change.length > 0 && (
-          <div style={rowLine}>
-            <span>Change (back to you)</span>
-            <span>{formatAda(change[0]?.value.lovelace ?? '0')} ₳</span>
+        {change.map((o, i) => (
+          <div key={i}>
+            <div style={rowLine}>
+              <span>Change (back to you)</span>
+              <span>{formatAda(o.value.lovelace)} ₳</span>
+            </div>
+            {o.value.assets.map((a) => (
+              <div key={a.unit} style={assetLine}>
+                {a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`}: {a.quantity}
+              </div>
+            ))}
           </div>
-        )}
+        ))}
         {built.summary.unresolvedInputs > 0 && (
           <p style={warn}>⚠ {built.summary.unresolvedInputs} input(s) could not be resolved for display.</p>
         )}

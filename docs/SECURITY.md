@@ -34,9 +34,17 @@ record. The binding invariants live in [CLAUDE.md §1](../CLAUDE.md).
 - Every gated method requires an allowlisted origin **and** an unlocked wallet.
 - **Per-call consent:** `enable`, `signTx`, `signData` each open a trusted popup window. A closed
   window counts as a decline.
-- **Decode-before-sign:** `signTx` resolves inputs and renders recipients/amounts/fee/change, and
-  **warns** when the tx also contains mint/certificates/withdrawals/governance/metadata (never a
-  blind blob). `signTx` returns only the witness set.
+- **Decode-before-sign:** `signTx` resolves inputs and renders **all** recipient and own/change
+  outputs with their native assets, the fee, **decoded mint/burn** (signed per-asset quantities) and
+  **decoded reward withdrawals** (destination + amount). It still **warns** for the components not yet
+  decoded in detail (certificates/governance/metadata/required-signers — buildooor lacks Conway-cert
+  decoding). Never a blind blob. `signTx` returns only the witness set.
+- **Concurrent approvals are isolated:** each prompt is stored under its own `reqId`-scoped key and the
+  popup loads exactly the request its window was opened for — a second (possibly malicious) request
+  can't overwrite or be answered in place of a legitimate one.
+- **Origin hygiene:** only well-formed `https` (or `http://localhost`) origins may drive the bridge;
+  the empty/opaque (`''`/`"null"`) origin is refused before it could reach the allowlist. Connected
+  sites are listed in Settings and can be **revoked**.
 
 ## Structural defenses
 
@@ -52,9 +60,13 @@ record. The binding invariants live in [CLAUDE.md §1](../CLAUDE.md).
 
 ## Review status (2026-06-24)
 
-All CLAUDE.md §1 invariants were verified against the code. No critical findings. Hardened during
-review: blind-sign warning for mint/cert/governance; `Math.random` → CSPRNG; CSP `frame-ancestors`;
-recipient paste caution.
+All CLAUDE.md §1 invariants were verified against the code. No critical or key-leak findings (byte-exact
+review↔sign binding and the no-secrets-in-globals/logs invariants hold). A follow-up adversarial pass
+(four subsystem reviewers) found and **fixed**: the concurrent-approval race (per-`reqId` keying);
+incomplete decode-before-sign (now renders all outputs + assets, decodes mint/burn and withdrawals);
+opaque-origin allowlist gap (origin guard); the Ogmios WebSocket leak + missing connect timeout;
+wrong-network send guard; a dApp-revoke UI. Earlier hardening: blind-sign warning, `Math.random` →
+CSPRNG, CSP `frame-ancestors`, recipient paste caution. Each fix has unit-test coverage.
 
 ### Known limitations / open items
 - **Offline brute-force** resistance of the at-rest vault = the KDF strength (PBKDF2 600k). There is

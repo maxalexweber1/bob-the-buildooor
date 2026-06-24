@@ -12,8 +12,15 @@ export function Connect() {
   const [pending, setPending] = useState<PendingApproval | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
 
+  // Load exactly the request this window was opened for (reqId in the URL hash), never "the latest"
+  // pending one — otherwise two overlapping prompts could show/answer each other's request (review #1).
   useEffect(() => {
-    wallet.getPendingApproval().then(setPending).catch(() => setPending(null));
+    const reqId = approvalReqIdFromHash();
+    if (!reqId) {
+      setPending(null);
+      return;
+    }
+    wallet.getPendingApproval(reqId).then(setPending).catch(() => setPending(null));
   }, []);
 
   async function respond(approved: boolean) {
@@ -57,6 +64,8 @@ export function Connect() {
 
 function SignTxBody({ summary }: { summary: TxSummary }) {
   const recipients = summary.outputs.filter((o) => !o.isOwn);
+  // Render EVERY own output, not just the first — and include their assets — so value (esp. tokens)
+  // routed back across multiple wallet addresses is never hidden from the user (review #2 / §1.5).
   const change = summary.outputs.filter((o) => o.isOwn);
   return (
     <div>
@@ -66,15 +75,18 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
           <div style={lbl}>Sends to</div>
           <code style={smallBox}>{o.address}</code>
           <div style={{ fontWeight: 700 }}>{formatAda(o.value.lovelace)} ₳</div>
-          {o.value.assets.map((a) => (
-            <div key={a.unit} style={asset}>{(a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`)}: {a.quantity}</div>
-          ))}
+          <AssetRows assets={o.value.assets} />
         </div>
       ))}
+      <MintRows mint={summary.mint} />
+      <WithdrawalRows withdrawals={summary.withdrawals} />
       <div style={row}><span>Network fee</span><span>{formatAda(summary.fee)} ₳</span></div>
-      {change.length > 0 && (
-        <div style={row}><span>Change</span><span>{formatAda(change[0]?.value.lovelace ?? '0')} ₳</span></div>
-      )}
+      {change.map((o, i) => (
+        <div key={i} style={{ marginTop: 4 }}>
+          <div style={row}><span>Change (back to you)</span><span>{formatAda(o.value.lovelace)} ₳</span></div>
+          <AssetRows assets={o.value.assets} />
+        </div>
+      ))}
       {summary.unresolvedInputs > 0 && (
         <p style={{ ...hint, color: '#c05621' }}>⚠ {summary.unresolvedInputs} input(s) could not be resolved for display.</p>
       )}
@@ -83,12 +95,58 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
   );
 }
 
+/** Render an output's native-asset lines (token name best-effort, else truncated hex). */
+function AssetRows({ assets }: { assets: TxSummary['outputs'][number]['value']['assets'] }) {
+  return (
+    <>
+      {assets.map((a) => (
+        <div key={a.unit} style={asset}>
+          {(a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`)}: {a.quantity}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Decoded mint/burn — a negative quantity is a burn (review #2: don't blind-sign a mint). */
+function MintRows({ mint }: { mint: TxSummary['mint'] }) {
+  if (mint.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={lbl}>Mints / burns tokens</div>
+      {mint.map((a) => {
+        const burn = a.quantity.startsWith('-');
+        const name = a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+        return (
+          <div key={a.unit} style={{ ...asset, color: burn ? '#9b2c2c' : '#2f855a' }}>
+            {burn ? 'Burn' : 'Mint'} {name}: {a.quantity} <span style={{ color: '#a0aec0' }}>({a.policyId.slice(0, 12)}…)</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Decoded reward withdrawals — surface destination + amount, not a boolean (review #2). */
+function WithdrawalRows({ withdrawals }: { withdrawals: TxSummary['withdrawals'] }) {
+  if (withdrawals.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={lbl}>Withdraws staking rewards</div>
+      {withdrawals.map((w) => (
+        <div key={w.rewardAddress}>
+          <code style={smallBox}>{w.rewardAddress}</code>
+          <div style={{ fontWeight: 700 }}>{formatAda(w.amount)} ₳</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** Surfaces tx components this build doesn't fully decode yet — so the user is never blind to them. */
 function TxFlagsWarning({ flags }: { flags: TxSummary['flags'] }) {
   const present = [
-    flags.mint && 'token mint/burn',
     flags.certificates && 'certificate(s)',
-    flags.withdrawals && 'reward withdrawal(s)',
     flags.governance && 'governance action(s)',
     flags.metadata && 'metadata',
     flags.requiredSigners && 'extra required signer(s)',
@@ -119,6 +177,12 @@ function title(t: PendingApproval['type']): string {
 }
 function approveLabel(t: PendingApproval['type']): string {
   return t === 'connect' ? 'Connect' : 'Sign';
+}
+
+/** Extract the reqId from the approval window's URL hash, e.g. "#approve?req=<uuid>". */
+function approvalReqIdFromHash(): string {
+  const query = window.location.hash.split('?')[1] ?? '';
+  return new URLSearchParams(query).get('req') ?? '';
 }
 
 /** Decode hex → UTF-8 only if printable; otherwise show hex. Pure, no deps. */

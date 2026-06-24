@@ -53,8 +53,10 @@ export type WalletCommand =
   | { type: 'buildSend'; toAddress: string; lovelace: string }
   | { type: 'approveSend'; id: string }
   | { type: 'cancelSend' }
-  | { type: 'getPendingApproval' }
+  | { type: 'getPendingApproval'; reqId: string }
   | { type: 'respondApproval'; reqId: string; approved: boolean }
+  | { type: 'listConnectedDapps' }
+  | { type: 'revokeDapp'; origin: string }
   | { type: 'getTxStatus'; txHash: string };
 
 export interface InternalRequest {

@@ -108,7 +108,62 @@ export function Settings() {
       </div>
 
       {status && <p style={{ fontSize: 13, marginTop: 12, color: '#2d3748' }}>{status}</p>}
+
+      <ConnectedSites />
     </section>
+  );
+}
+
+/** Lists dApp origins the user has connected (the allowlist) and lets them revoke access (review #6). */
+function ConnectedSites() {
+  const [sites, setSites] = useState<string[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = () =>
+    wallet
+      .listConnectedDapps()
+      .then(setSites)
+      .catch((e: unknown) => setErr(e instanceof Error ? e.message : 'Failed to load connected sites'));
+
+  useEffect(() => {
+    void load();
+  }, []);
+
+  async function revoke(origin: string) {
+    setErr(null);
+    try {
+      await wallet.revokeDapp(origin);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : 'Revoke failed');
+    }
+  }
+
+  return (
+    <div style={{ marginTop: 24, borderTop: '1px solid #e2e8f0', paddingTop: 16 }}>
+      <h2 style={{ fontSize: 16, margin: '0 0 4px' }}>Connected sites</h2>
+      <p style={{ ...hint, marginTop: 0 }}>
+        Sites you have connected can read your addresses, balance and UTxOs (each signature still needs
+        your approval). Revoke any you no longer trust.
+      </p>
+      {err && <p style={{ fontSize: 13, color: '#c53030' }}>{err}</p>}
+      {sites === null ? (
+        <p style={hint}>Loading…</p>
+      ) : sites.length === 0 ? (
+        <p style={hint}>No sites connected.</p>
+      ) : (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+          {sites.map((origin) => (
+            <li key={origin} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, padding: '6px 0' }}>
+              <code style={{ fontSize: 13, wordBreak: 'break-all' }}>{origin}</code>
+              <button type="button" style={{ ...secondary, padding: '4px 10px', color: '#c53030', borderColor: '#feb2b2' }} onClick={() => void revoke(origin)}>
+                Revoke
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

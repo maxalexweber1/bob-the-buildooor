@@ -50,7 +50,29 @@ interface Paginate {
   limit: number;
 }
 
+/**
+ * Only a well-formed secure web origin may drive the bridge. This rejects the empty/opaque origin
+ * (`''`, `'null'` from sandboxed/`data:`/`file:` frames) BEFORE it could ever be persisted to the
+ * allowlist — otherwise a single approval of an opaque origin would silently grant every opaque-origin
+ * frame read access forever (security review #3). Localhost over http is allowed for local dApp dev.
+ */
+export function isValidDappOrigin(origin: string): boolean {
+  if (!origin || origin === 'null') return false;
+  try {
+    const u = new URL(origin);
+    if (u.protocol === 'https:') return true;
+    return u.protocol === 'http:' && (u.hostname === 'localhost' || u.hostname === '127.0.0.1');
+  } catch {
+    return false;
+  }
+}
+
 export async function handleCip30(method: string, params: unknown[], origin: string): Promise<unknown> {
+  // Trust no opaque/malformed origin — never enable, query, or sign for one.
+  if (!isValidDappOrigin(origin)) {
+    if (method === 'isEnabled') return false;
+    throw refused('refused: invalid or untrusted origin');
+  }
   if (method === 'isEnabled') return allowlist.has(origin);
   if (method === 'enable') return enable(origin);
 
@@ -202,7 +224,7 @@ async function signTx(
   // not yet recognize Conway governance certs (`isCertificate(CertVoteDeleg)` is false), so a vote-
   // delegation/DRep tx can't be built or round-tripped to test it here. Revisit when buildooor adds
   // Conway-governance-cert support (track alongside the keepRelevant PR).
-  if (summary.flags.certificates || summary.flags.governance || summary.flags.withdrawals) {
+  if (summary.flags.certificates || summary.flags.governance || summary.withdrawals.length > 0) {
     signingKeys.push(deriveKey(root, 0, Role.Staking, 0), deriveKey(root, 0, Role.DRep, 0));
   }
   return signTxWitnessSet(txCbor, signingKeys);

@@ -16,6 +16,7 @@ import { settings } from './settings';
 import { getProvider, clearProviderCache } from './walletProvider';
 import { discoverChain, nextReceiveIndex } from './discovery';
 import { getPendingApproval, respondApproval } from './dapp/approvals';
+import { allowlist } from './dapp/allowlist';
 
 async function status(): Promise<WalletStatus> {
   return { initialized: await vault.isInitialized(), unlocked: await vault.isUnlocked() };
@@ -205,10 +206,16 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
       return chromeSessionStore.remove(PENDING_KEY);
 
     case 'getPendingApproval':
-      return getPendingApproval();
+      return getPendingApproval(command.reqId);
 
     case 'respondApproval':
       return respondApproval(command.reqId, command.approved);
+
+    case 'listConnectedDapps':
+      return allowlist.list();
+
+    case 'revokeDapp':
+      return allowlist.remove(command.origin);
 
     case 'getTxStatus': {
       const provider = await getProvider();

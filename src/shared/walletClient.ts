@@ -41,8 +41,11 @@ export const wallet = {
     send<BuiltTx>({ type: 'buildSend', toAddress, lovelace }),
   approveSend: (id: string) => send<SubmitResult>({ type: 'approveSend', id }),
   cancelSend: () => send<void>({ type: 'cancelSend' }),
-  getPendingApproval: () => send<PendingApproval | null>({ type: 'getPendingApproval' }),
+  getPendingApproval: (reqId: string) =>
+    send<PendingApproval | null>({ type: 'getPendingApproval', reqId }),
   respondApproval: (reqId: string, approved: boolean) =>
     send<void>({ type: 'respondApproval', reqId, approved }),
+  listConnectedDapps: () => send<string[]>({ type: 'listConnectedDapps' }),
+  revokeDapp: (origin: string) => send<void>({ type: 'revokeDapp', origin }),
   getTxStatus: (txHash: string) => send<TxStatus>({ type: 'getTxStatus', txHash }),
 };
