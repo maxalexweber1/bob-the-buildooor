@@ -35,3 +35,6 @@ coverage/
 # The generated product assets (src/assets/icon-*.png) ARE committed; the generator is not.
 scripts/
 _logo_src.png
+
+# Local PR drafts — not part of the committed docs.
+docs/PR-*.md

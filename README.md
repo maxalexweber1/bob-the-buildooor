@@ -37,6 +37,7 @@ Supply-chain note: `.npmrc` sets `ignore-scripts=true`; only allow-listed packag
 
 - Architecture & decisions: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md)
 - Step-by-step build guide: [`docs/EXECUTION_PLAN.md`](docs/EXECUTION_PLAN.md)
+- Open items, upstream PRs & the dependency patch: [`docs/OPEN_ITEMS.md`](docs/OPEN_ITEMS.md)
 - Security model & review: [`docs/SECURITY.md`](docs/SECURITY.md)
 - Testing strategy: [`docs/TESTING.md`](docs/TESTING.md)
 - Firefox port plan: [`docs/FIREFOX.md`](docs/FIREFOX.md)

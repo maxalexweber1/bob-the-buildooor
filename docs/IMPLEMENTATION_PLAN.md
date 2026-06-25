@@ -377,10 +377,10 @@ Plutus build. Priority for a self-custody wallet:
 | CIP | Label / fields | Priority | Where it lands |
 |---|---|---|---|
 | **CIP-40** Collateral output | tx-body `collateral_return` (16) + `total_collateral` (17) | **MUST** (Plutus/script spend) | M5 — **covered**: `plutusBuild.ts` passes `collaterals` + `changeAddress` to buildooor's `TxBuilder.buildSync`, which sets both fields. Supersedes the CIP-30 `getCollateral` pattern. |
-| **CIP-25** NFT metadata (v1/v2) | metadata label `721`, mint-time | **SHOULD** | tx decoder + asset view — render NFT name/image. |
-| **CIP-68** Datum metadata | ref-NFT `100` + user `222`/`333`/`444`, same policy | **SHOULD** | asset view — decode modern NFT/FT metadata from the reference-NFT datum (read via provider). |
-| **CIP-20** Tx message/memo | metadata label `674`, `msg:[…]` ≤64 B/line | **SHOULD** | tx history (render incoming memos); optional "attach memo" on send. |
-| **CIP-67** Asset-name label registry | 4-byte name prefix `[0000|label|CRC8|0000]` | NICE | only to parse/strip CIP-68 label prefixes for display. |
+| **CIP-25** NFT metadata (v1/v2) | metadata label `721`, mint-time | **SHOULD ✅ DONE** | `provider.getAssetMetadata` (Blockfrost `/assets/{asset}` + Koios `/asset_info`) → name/description; dashboard shows the resolved name (lazy, persisted 24 h cache, network-keyed). **Images ✅** (A2): SW proxies the art → `data:` URI under a tightened `img-src 'self' data:` CSP, with SSRF-validated fetch (`core/assetImage.ts`). |
+| **CIP-68** Datum metadata | ref-NFT `100` + user `222`/`333`/`444`, same policy | **SHOULD ✅ NAMES DONE** | Same `getAssetMetadata` path (Blockfrost decodes CIP-68 → `onchain_metadata`). Name prefix also handled locally (CIP-67 ✅). Koios/Ogmios metadata fetch not implemented (Blockfrost-only for now). |
+| **CIP-20** Tx message/memo | metadata label `674`, `msg:[…]` ≤64 B/line | **SHOULD ✅ DONE** | `core/tx/txMessage.ts` decodes label 674 (+ CIP-83 `enc` flag); shown in the signTx approval (`MessageRows`). Outbound "attach memo" not yet built. |
+| **CIP-67** Asset-name label registry | 4-byte name prefix `[0000\|label\|CRC8\|0000]` | NICE ✅ DONE | `core/cip67.ts` (`parseCip67` with CRC-8/SMBUS validation, `cip67LabelName`); `balance.ts` strips the prefix for the display name + exposes `cip67Label`; badge in dashboard + approval. |
 | **CIP-83** Encrypted tx messages | addendum to CIP-20, label `674` + `enc` (basic = AES-256-CBC) | NICE | optional decode of encrypted memos; non-decoding just shows ciphertext. |
 | **CIP-36 / CIP-15** Catalyst voting registration | metadata `61284`/`61285` | NICE (open) | only if we add Catalyst voting — unresolved in the review; treat as out-of-scope until product asks. |
 
