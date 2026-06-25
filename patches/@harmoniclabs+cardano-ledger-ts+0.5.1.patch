@@ -1,0 +1,47 @@
+diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js
+index 20f52d6..2ef9ca9 100644
+--- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js
++++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js
+@@ -23,7 +23,11 @@ var obj_utils_1 = require("@harmoniclabs/obj-utils");
+ var hashes_1 = require("../../hashes/index.js");
+ var NativeScript_1 = require("../../script/NativeScript.js");
+ var Script_1 = require("../../script/Script.js");
+-var TxMetadata_1 = require("../metadata/TxMetadata.js");
++// PATCH (cardano-ledger-ts-fork dual-class pattern, cf. b68105f): the package index — and therefore
++// TxBuilder's metadata/`memo` construction — uses the eras/common TxMetadata copy, but this validator
++// imported the divergent dist/tx/metadata copy, so `metadata instanceof TxMetadata` always failed and
++// every metadata/memo build threw. Repoint to the eras/common copy so the instanceof matches.
++var TxMetadata_1 = require("../../eras/common/tx/metadata/TxMetadata.js");
+ var InvalidCborFormatError_1 = require("../../utils/InvalidCborFormatError.js");
+ var getSubCborRef_1 = require("../../utils/getSubCborRef.js");
+ function scriptArrToCbor(scripts) {
+@@ -196,10 +200,12 @@ var AuxiliaryData = /** @class */ (function () {
+             _loop_1(i);
+         }
+         var _b = __read(fields, 5), _metadata = _b[0], _native = _b[1], _pV1 = _b[2], _pV2 = _b[3], _pV3 = _b[4];
+-        if (!(_native instanceof cbor_1.CborArray &&
+-            _pV1 instanceof cbor_1.CborArray &&
+-            _pV2 instanceof cbor_1.CborArray &&
+-            _pV3 instanceof cbor_1.CborArray))
++        // PATCH (cardano-ledger-ts-fork bc95c39 / PR #19): every Conway aux_data field is optional —
++        // only enforce the CborArray type when the field is actually present (metadata-only is valid).
++        if (!((_native === undefined || _native instanceof cbor_1.CborArray) &&
++            (_pV1 === undefined || _pV1 instanceof cbor_1.CborArray) &&
++            (_pV2 === undefined || _pV2 instanceof cbor_1.CborArray) &&
++            (_pV3 === undefined || _pV3 instanceof cbor_1.CborArray)))
+             throw new InvalidCborFormatError_1.InvalidCborFormatError("AuxiliaryData");
+         return new AuxiliaryData({
+             metadata: _metadata === undefined ? undefined : TxMetadata_1.TxMetadata.fromCborObj(_metadata),
+diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
+index 05bf826..9d1ceaf 100644
+--- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
++++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
+@@ -24,7 +24,7 @@ var credentials_1 = require("../../credentials/index.js");
+ var hashes_1 = require("../../hashes/index.js");
+ var TxWithdrawals_1 = require("../../ledger/TxWithdrawals.js");
+ var LegacyPPUpdateProposal_1 = require("../../ledger/protocol/LegacyPPUpdateProposal.js");
+-var Certificate_1 = require("../../ledger/certs/Certificate.js");
++var Certificate_1 = require("../../eras/common/ledger/certs/Certificate.js");
+ var ICert_1 = require("../../ledger/certs/ICert.js");
+ var TxWithdrawals_2 = require("../../ledger/TxWithdrawals.js");
+ var InvalidCborFormatError_1 = require("../../utils/InvalidCborFormatError.js");

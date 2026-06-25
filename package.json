@@ -9,15 +9,17 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "patch": "patch-package",
+    "dev": "patch-package && vite",
+    "build": "patch-package && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --ext .ts,.tsx",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\"",
-    "test": "vitest run",
-    "test:watch": "vitest",
-    "allow-scripts": "allow-scripts run"
+    "test": "patch-package && vitest run",
+    "test:watch": "patch-package && vitest",
+    "allow-scripts": "allow-scripts run",
+    "postinstall": "patch-package"
   },
   "comment": "Exact-pinned versions (no ^): a key-handling extension minimizes supply-chain drift (CLAUDE.md §2). Bump deliberately. @harmoniclabs/buildooor: bump when the keepRelevant fix (PR#12) ships.",
   "dependencies": {
@@ -38,12 +40,13 @@
     "@vitejs/plugin-react": "4.7.0",
     "eslint": "8.57.1",
     "eslint-plugin-react-hooks": "4.6.2",
+    "patch-package": "8.0.1",
     "prettier": "3.8.4",
     "typescript": "5.9.3",
     "vite": "5.4.21",
     "vitest": "2.1.9"
   },
-  "comment2": "Supply-chain (T7.1): install scripts are blocked by default via .npmrc (ignore-scripts=true). Only the vetted esbuild native-binary build is allow-listed. After `npm ci`, run `npm run allow-scripts`.",
+  "comment2": "Supply-chain (T7.1): install scripts are blocked by default via .npmrc (ignore-scripts=true). Only the vetted esbuild native-binary build is allow-listed. After `npm ci`, run `npm run allow-scripts`. NOTE: ignore-scripts also blocks lifecycle/pre-post hooks (postinstall, pretest, …), so patch-package can't auto-run on install — instead it is embedded directly in the `dev`/`build`/`test` commands (idempotent, ~1s) so the patches/ always apply before those flows. To apply patches manually use `npm run patch`. The patch-package dev-tree carries audit advisories but is dev-only — `npm audit --omit=dev` stays clean.",
   "lavamoat": {
     "allowScripts": {
       "vite>esbuild#0.21.5": true
