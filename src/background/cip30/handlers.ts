@@ -19,6 +19,7 @@ import {
   PaginateError,
 } from '../../shared/errors';
 import { vault } from '../vault';
+import { negotiateExtensions, extensionCipOf, type Extension } from '../../shared/extensions';
 import { settings, type WalletSettings } from '../settings';
 import { getProvider } from '../walletProvider';
 import { touchAutoLock } from '../autolock';
@@ -74,24 +75,43 @@ export async function handleCip30(method: string, params: unknown[], origin: str
     throw refused('refused: invalid or untrusted origin');
   }
   if (method === 'isEnabled') return allowlist.has(origin);
-  if (method === 'enable') return enable(origin);
+  if (method === 'enable') return enable(origin, params[0]);
 
   // Every other method is gated on an enabled origin.
   if (!(await allowlist.has(origin))) throw refused('origin not enabled — call enable() first');
   return authedMethod(method, params, origin);
 }
 
-async function enable(origin: string): Promise<boolean> {
-  if (await allowlist.has(origin)) return true;
-  const approved = await requestApproval('connect', origin);
-  if (!approved) throw refused('connection request declined');
-  await allowlist.add(origin);
-  return true;
+/**
+ * CIP-30 enable({extensions}): negotiate the granted extensions (requested ∩ supported), prompt for
+ * consent on a not-yet-authorized origin, persist the origin + granted extensions, and return the
+ * granted set so the inpage provider can expose exactly those namespaces. Re-enabling an already
+ * authorized origin updates its extensions without re-prompting (governance methods are still
+ * per-call approval-gated). `requestedExtensions` is untrusted page input — negotiate() validates it.
+ */
+async function enable(origin: string, requestedExtensions: unknown): Promise<Extension[]> {
+  const granted = negotiateExtensions(requestedExtensions);
+  if (!(await allowlist.has(origin))) {
+    const approved = await requestApproval('connect', origin);
+    if (!approved) throw refused('connection request declined');
+  }
+  await allowlist.add(origin, granted);
+  return granted.map((cip) => ({ cip }));
 }
 
 async function authedMethod(method: string, params: unknown[], origin: string): Promise<unknown> {
   const s = await settings.get();
   if (method === 'getNetworkId') return networkId(s);
+  // getExtensions just reports the per-origin negotiated set — no keys/unlock required.
+  if (method === 'getExtensions') return (await allowlist.getExtensions(origin)).map((cip) => ({ cip }));
+
+  // Extension methods (cipNN.*) are only callable if that extension was negotiated for this origin.
+  // The inpage provider already hides un-granted namespaces, but a hostile page can craft a raw
+  // postMessage bypassing it (CLAUDE.md §6 — trust no page input), so enforce it here too.
+  const extCip = extensionCipOf(method);
+  if (extCip !== null && !(await allowlist.getExtensions(origin)).includes(extCip)) {
+    throw apiError(APIErrorCode.InvalidRequest, `cip-${extCip} extension not enabled for this origin`);
+  }
 
   // The rest need keys (unlocked) + chain data.
   if (!(await vault.isUnlocked())) throw internalError('wallet is locked');
@@ -128,6 +148,8 @@ async function authedMethod(method: string, params: unknown[], origin: string): 
       if (selected === null) return null; // requested amount unattainable (CIP-30 semantics)
       return paginate(selected.map((u) => toHex(u.toCborBytes())), params[1] as Paginate | undefined);
     }
+    // DEPRECATED in CIP-30 in favour of CIP-40 explicit collateral-output tx fields, but still
+    // implemented: many shipping dApps continue to call it to source ADA-only collateral UTxOs.
     case 'getCollateral': {
       const requested = parseAmount(params[0] as string | undefined) ?? 5_000_000n;
       const utxos = await collectUtxos(root, s, provider);

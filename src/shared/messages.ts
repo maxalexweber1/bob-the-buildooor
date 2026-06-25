@@ -10,6 +10,7 @@ export const DAPP_PORT = 'bob:cip30' as const;
 export type RpcMethod =
   | 'enable'
   | 'isEnabled'
+  | 'getExtensions'
   | 'getNetworkId'
   | 'getUtxos'
   | 'getBalance'
@@ -21,11 +22,10 @@ export type RpcMethod =
   | 'signTx'
   | 'signData'
   | 'submitTx'
-  // CIP-95 (Conway governance) extension — api.cip95.*
-  | 'cip95.getPubDRepKey'
-  | 'cip95.getRegisteredPubStakeKeys'
-  | 'cip95.getUnregisteredPubStakeKeys'
-  | 'cip95.signData';
+  // CIP-30 extension methods are routed generically as `cip{N}.{method}` (e.g. cip95.getPubDRepKey).
+  // The set of real methods lives in shared/extensions.ts (EXTENSION_REGISTRY); the background rejects
+  // any cipNN.* method that isn't implemented or whose extension the origin didn't negotiate.
+  | `cip${number}.${string}`;
 
 export interface RpcRequest {
   target: typeof TARGET_CONTENT;

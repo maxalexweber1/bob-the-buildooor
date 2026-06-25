@@ -17,6 +17,7 @@ Goal: create/restore a wallet, encrypt it, lock/unlock survives SW restarts.
 
 - [x] **T1.1 — Decide KDF** (IMPLEMENTATION_PLAN §14). Pick **PBKDF2 ≥600k via SubtleCrypto** (keeps `script-src 'self'`) *or* Argon2id (accept `'wasm-unsafe-eval'`). Record decision in this file.
   - **DECISION (2026-06-23): PBKDF2-HMAC-SHA256, ≥600,000 iterations, via `crypto.subtle`.** Keeps the strict CSP `script-src 'self'` — **no** `'wasm-unsafe-eval'`, no WASM KDF dependency (honours CLAUDE.md §1.7/§1.9). AES-256-GCM for the cipher. KDF id + iteration count + salt persisted in vault metadata so the parameters can be migrated forward (e.g. raise iterations) without locking out existing vaults.
+  - **vs. legacy precedent (standards review 2026-06):** the historical Cardano vault standard is **EMIP-003** (Daedalus/Yoroi) = PBKDF2-HMAC-SHA**512** @ **19,162** iterations + **ChaCha20Poly1305**. We deliberately diverge: AES-256-GCM (native in `crypto.subtle`, no extra dep) and ≥600k iterations (EMIP-003's 19,162 is well below current OWASP guidance). Consequence: **not** EMIP-003 wire-compatible — acceptable because we import by **mnemonic**, never by raw vault blob. Full rationale in IMPLEMENTATION_PLAN §10.1.
   - done-when: decision documented + a `crypto/kdf.ts` interface fixed.
 - [x] **T1.2 — Crypto wrapper.** AES-256-GCM encrypt/decrypt, 32-byte salt, ≥12-byte IV, KDF params persisted in vault metadata.
   - files: `src/core/crypto/kdf.ts`, `src/core/crypto/aead.ts`
@@ -115,6 +116,15 @@ Goal: real dApps connect and transact through the wallet.
   - Reference: ODATANO `srv/blockchain/signing/cose-verifier.ts` (mirror to produce).
   - done-when: a "Sign-in with Cardano" demo verifies the signature against the address credential.
 
+**Standards-review additions (round 1, 2026-06):**
+- [x] **T4.6 — `getExtensions()` + extension negotiation.** CIP-30 conformance gap: `getExtensions()` was missing and `enable()` ignored its `{extensions}` argument. Now `enable({extensions})` negotiates `requested ∩ supported`, persists the granted CIP set per origin, and the inpage provider exposes only the granted extension namespaces; `getExtensions()` reports the negotiated set.
+  - files: `src/shared/extensions.ts` (new — supported set + `negotiateExtensions`, trust-no-input), `src/background/dapp/allowlist.ts` (per-origin extensions + legacy `string[]` migration), `src/shared/messages.ts`, `src/background/cip30/handlers.ts`, `src/inpage/provider.ts`
+  - done-when: ✅ unit tests — negotiation grants only supported CIPs, `getExtensions()` reflects the grant, malformed args ignored, legacy allowlist migrates. (`test/cip30.test.ts`, `test/allowlist.test.ts`; 180/180 pass.)
+- [x] **T4.7 — Generic extension dispatch.** `EXTENSION_REGISTRY` (shared/extensions.ts) is the single source of truth for `{cip, namespace, methods, placement}`; the inpage provider builds the granted extensions' api surface generically from it, the wire type is `cip{N}.{method}`, and the background gates every `cipNN.*` call on the per-origin negotiated set (defends the raw-postMessage bypass of the inpage gating). **Also fixed a CIP-95 conformance bug found in the process:** `getRegisteredPubStakeKeys` is exposed UN-namespaced as `api.getRegisteredPubStakeKeys()` (verified verbatim against CIP-0095/README.md headings — we previously exposed it under `cip95.`).
+  - files: `src/shared/extensions.ts` (registry + `extensionCipOf`/`extensionWireKey`), `src/inpage/provider.ts`, `src/background/cip30/handlers.ts`, `src/shared/messages.ts`
+  - done-when: ✅ unit tests — registry placement (`test/extensions.test.ts`), extension-not-negotiated → InvalidRequest (-1) gate, negotiated → success (`test/cip30.test.ts`). 189/189 pass, typecheck + lint clean.
+- [x] **T4.8 — `getCollateral`/CIP-40 note.** In-code comment marking `getCollateral` deprecated in favour of CIP-40 collateral-output; behaviour unchanged.
+
 **Milestone exit:** a third-party CIP-30 dApp works against the wallet on testnet.
 
 ---
@@ -146,15 +156,18 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
 - [x] **T6.1 — CIP-95 extension.** Negotiate via `enable({extensions:[{cip:95}]})`; `api.cip95.{getPubDRepKey,getRegisteredPubStakeKeys,getUnregisteredPubStakeKeys,signData}`.
   - files: `src/background/cip30/cip95.ts`
   - key APIs: DRep key `…/3/0` (CIP-105)
+  - note: dispatch the `cipNN.` namespace **generically** off `supportedExtensions` (IMPLEMENTATION_PLAN §9), not hard-wired to CIP-95 — so CIP-103/104 drop in without touching the bridge. `getRegisteredPubStakeKeys` stays un-namespaced per spec.
 - [ ] **T6.2 — Conway certs/voting in signTx.** Witness vote-delegation, DRep reg/retire, voting/proposal procedures.
   - files: `src/background/cip30/signTx.ts`, `src/core/tx/build.ts`
   - done-when: a vote/delegation tx confirms on testnet.
 - [ ] **T6.3 — Ledger (WebHID).** `ledgerjs-hw-app-cardano` + `hw-transport-webhid`; derive + sign; `tx.addVKeyWitness(...)`. **Transport outside the SW** (page/offscreen).
   - files: `src/background/hw/ledger.ts`, offscreen doc
+  - **HARD MV3 constraint (standards review 2026-06, Chrome docs):** `HID.requestDevice()` *cannot* be called from the service worker and needs a user gesture — call it from the popup/options/offscreen page, then the SW may use `navigator.hid.getDevices()`. So device picking lives in a privileged page; the SW only re-binds to an already-granted device.
   - done-when: a Ledger-signed tx confirms; keys never in the browser.
 - [ ] **T6.4 — Trezor (Connect, popup mode).** Account import + signing; document the iframe-in-extension workaround.
   - files: `src/background/hw/trezor.ts`
   - done-when: a Trezor-signed tx confirms.
+- [ ] **T6.5 — CIP-103 bulk signing (DEFERRED, should-have).** `api.cip103.{signTxs,submitTxs}` — one approval for a chain of txs. **Deferred post-v1** (IMPLEMENTATION_PLAN §14): adoption unverified; implement as a pure add-on via the generic dispatch (T6.1) when a target DeFi dApp requires it. Approval UI must still decode **every** tx in the batch (CLAUDE.md §1.5) — no batch-blind-sign.
 
 ---
 

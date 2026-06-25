@@ -2,7 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Shared mutable state + a fake provider, hoisted so the vi.mock factories can close over them.
 const h = vi.hoisted(() => {
-  const state = { unlocked: true, allow: new Set<string>(), approve: true, network: 'preview' as string };
+  const state = {
+    unlocked: true,
+    allow: new Set<string>(),
+    ext: new Map<string, number[]>(),
+    approve: true,
+    network: 'preview' as string,
+  };
   const provider = {
     name: 'fake',
     network: 'preview',
@@ -28,9 +34,16 @@ vi.mock('../src/background/walletProvider', () => ({ getProvider: async () => h.
 vi.mock('../src/background/dapp/allowlist', () => ({
   allowlist: {
     has: async (o: string) => h.state.allow.has(o),
-    add: async (o: string) => void h.state.allow.add(o),
+    add: async (o: string, ext: number[] = []) => {
+      h.state.allow.add(o);
+      h.state.ext.set(o, ext);
+    },
+    getExtensions: async (o: string) => h.state.ext.get(o) ?? [],
     list: async () => [...h.state.allow],
-    remove: async (o: string) => void h.state.allow.delete(o),
+    remove: async (o: string) => {
+      h.state.allow.delete(o);
+      h.state.ext.delete(o);
+    },
   },
 }));
 vi.mock('../src/background/dapp/approvals', () => ({ requestApproval: async () => h.state.approve }));
@@ -59,6 +72,7 @@ function aTxCbor(): string {
 beforeEach(() => {
   h.state.unlocked = true;
   h.state.allow = new Set();
+  h.state.ext = new Map();
   h.state.approve = true;
   h.state.network = 'preview';
   h.provider.getUtxos.mockClear();
@@ -72,8 +86,8 @@ describe('handleCip30 — enable & gating (T4.1)', () => {
     expect(await handleCip30('isEnabled', [], ORIGIN)).toBe(true);
   });
 
-  it('enable() prompts and allowlists on approval', async () => {
-    expect(await handleCip30('enable', [], ORIGIN)).toBe(true);
+  it('enable() prompts and allowlists on approval (no extensions → empty grant)', async () => {
+    expect(await handleCip30('enable', [], ORIGIN)).toEqual([]);
     expect(h.state.allow.has(ORIGIN)).toBe(true);
   });
 
@@ -94,8 +108,58 @@ describe('handleCip30 — enable & gating (T4.1)', () => {
   });
 });
 
+describe('handleCip30 — getExtensions & extension negotiation (T4.6)', () => {
+  it('enable({extensions:[{cip:95}]}) grants it; getExtensions reports the granted set', async () => {
+    expect(await handleCip30('enable', [[{ cip: 95 }]], ORIGIN)).toEqual([{ cip: 95 }]);
+    expect(await handleCip30('getExtensions', [], ORIGIN)).toEqual([{ cip: 95 }]);
+  });
+
+  it('enable() with no extensions → getExtensions reports none', async () => {
+    await handleCip30('enable', [], ORIGIN);
+    expect(await handleCip30('getExtensions', [], ORIGIN)).toEqual([]);
+  });
+
+  it('an unsupported requested extension is not granted', async () => {
+    expect(await handleCip30('enable', [[{ cip: 999 }]], ORIGIN)).toEqual([]);
+    expect(await handleCip30('getExtensions', [], ORIGIN)).toEqual([]);
+  });
+
+  it('a malformed extensions argument is ignored, not fatal', async () => {
+    expect(await handleCip30('enable', ['not-an-array'], ORIGIN)).toEqual([]);
+    expect(h.state.allow.has(ORIGIN)).toBe(true);
+  });
+
+  it('getExtensions needs no unlock', async () => {
+    h.state.allow.add(ORIGIN);
+    h.state.ext.set(ORIGIN, [95]);
+    h.state.unlocked = false;
+    expect(await handleCip30('getExtensions', [], ORIGIN)).toEqual([{ cip: 95 }]);
+  });
+
+  it('getExtensions on a non-enabled origin → Refused (-3)', async () => {
+    await expect(handleCip30('getExtensions', [], ORIGIN)).rejects.toMatchObject({ code: -3 });
+  });
+
+  it('a cip95.* method is rejected (InvalidRequest -1) if cip95 was not negotiated (raw-message bypass)', async () => {
+    // Origin is enabled but did NOT negotiate cip95 — a hostile page crafting a raw cip95 message
+    // must not reach the governance handler (T4.7 gate).
+    h.state.allow.add(ORIGIN); // enabled, but h.state.ext has no entry → no extensions
+    await expect(handleCip30('cip95.getPubDRepKey', [], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('the same cip95.* method succeeds once cip95 IS negotiated', async () => {
+    h.state.allow.add(ORIGIN);
+    h.state.ext.set(ORIGIN, [95]);
+    const hex = (await handleCip30('cip95.getPubDRepKey', [], ORIGIN)) as string;
+    expect(hex).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
 describe('handleCip30 — read methods (T4.2)', () => {
-  beforeEach(() => h.state.allow.add(ORIGIN));
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+    h.state.ext.set(ORIGIN, [95]); // cip95 negotiated (gates the cip95.* methods below — T4.7)
+  });
 
   it('getNetworkId: 0 testnet / 1 mainnet (no unlock needed)', async () => {
     h.state.unlocked = false;

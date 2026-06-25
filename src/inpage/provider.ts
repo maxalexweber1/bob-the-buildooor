@@ -7,6 +7,7 @@ import {
   type RpcMethod,
   type RpcResponse,
 } from '../shared/messages';
+import { SUPPORTED_EXTENSIONS, EXTENSION_REGISTRY, type Extension } from '../shared/extensions';
 
 const WALLET_KEY = 'bob';
 const WALLET_NAME = 'bob-the-buildooor';
@@ -28,9 +29,42 @@ function request<T>(method: RpcMethod, ...params: unknown[]): Promise<T> {
   });
 }
 
-/** The full CIP-30 API, granted after enable(). All returns are hex (address bytes / cbor). */
-function fullApi() {
+type ExtMethod = (...args: unknown[]) => Promise<unknown>;
+
+/**
+ * Build the granted extensions' api surface generically from EXTENSION_REGISTRY. For each enabled CIP,
+ * every method becomes a thin forwarder to `cip{N}.{name}` and is placed either under the `cipNN`
+ * namespace or at the api root, per the registry. This is the single dispatch path — a new extension
+ * is a registry entry plus a background handler, with no edit here or in the bridge. The forwarders
+ * are intentionally generically typed: this object is consumed by external dApp code, not by us.
+ */
+function extensionApi(enabledCips: number[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const ext of EXTENSION_REGISTRY) {
+    if (!enabledCips.includes(ext.cip)) continue;
+    for (const m of ext.methods) {
+      const wire = `${ext.namespace}.${m.name}` as RpcMethod;
+      const fn: ExtMethod = (...args) => request(wire, ...args);
+      if (m.placement === 'root') {
+        out[m.name] = fn;
+      } else {
+        const ns = (out[ext.namespace] as Record<string, ExtMethod> | undefined) ?? {};
+        ns[m.name] = fn;
+        out[ext.namespace] = ns;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * The full CIP-30 API, granted after enable(). All returns are hex (address bytes / cbor).
+ * `enabledCips` is the set negotiated at enable() time — extension methods/namespaces are attached
+ * only when their CIP was granted, and `getExtensions()` reports that same set.
+ */
+function fullApi(enabledCips: number[]) {
   return {
+    getExtensions: () => request<Extension[]>('getExtensions'),
     getNetworkId: () => request<number>('getNetworkId'),
     getUtxos: (amount?: string, paginate?: { page: number; limit: number }) =>
       request<string[] | null>('getUtxos', amount, paginate),
@@ -45,15 +79,8 @@ function fullApi() {
     signData: (addr: string, payload: string) =>
       request<{ signature: string; key: string }>('signData', addr, payload),
     submitTx: (tx: string) => request<string>('submitTx', tx),
-    // CIP-95 governance extension.
-    cip95: {
-      getPubDRepKey: () => request<string>('cip95.getPubDRepKey'),
-      getRegisteredPubStakeKeys: () => request<string[]>('cip95.getRegisteredPubStakeKeys'),
-      getUnregisteredPubStakeKeys: () => request<string[]>('cip95.getUnregisteredPubStakeKeys'),
-      signData: (addr: string, payload: string) =>
-        request<{ signature: string; key: string }>('cip95.signData', addr, payload),
-    },
     experimental: {},
+    ...extensionApi(enabledCips),
   };
 }
 
@@ -61,11 +88,13 @@ const cardanoApi = {
   apiVersion: '1',
   name: WALLET_NAME,
   icon: 'data:image/svg+xml;base64,', // TODO(T7.5)
-  supportedExtensions: [{ cip: 95 }] as Array<{ cip: number }>,
+  supportedExtensions: SUPPORTED_EXTENSIONS,
   isEnabled: () => request<boolean>('isEnabled'),
-  enable: async () => {
-    await request<boolean>('enable'); // consent gate (throws CIP-30 error if declined)
-    return fullApi();
+  enable: async (opts?: { extensions?: Extension[] }) => {
+    // Negotiate extensions: the background returns exactly the granted set (consent-gated; throws a
+    // CIP-30 error if declined). Build the API surface to match what was granted.
+    const granted = await request<Extension[]>('enable', opts?.extensions ?? []);
+    return fullApi(granted.map((e) => e.cip));
   },
 };
 

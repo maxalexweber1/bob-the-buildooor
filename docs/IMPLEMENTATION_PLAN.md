@@ -266,11 +266,12 @@ After `enable()` (origin persisted in the allowlist) the full API is granted. **
 
 | Method | Source | Note |
 |---|---|---|
+| `getExtensions()` | Keyring/settings | Returns the `Extension[]` actually enabled for this connection (subset of `supportedExtensions`). Part of the full API — do not omit. |
 | `getNetworkId()` | Keyring/settings | 0=testnet, 1=mainnet |
 | `getUtxos(amount?, paginate?)` | Provider | `amount` set → only enough UTxOs to reach the target value; otherwise all; `null` if unattainable |
 | `getBalance()` | Provider | `cbor<value>` |
 | `getUsedAddresses` / `getUnusedAddresses` / `getChangeAddress` / `getRewardAddresses` | Keyring | hex address bytes |
-| `getCollateral({amount})` | Provider | DEPRECATED, but implement (ADA-only UTxOs, ~5 ADA) |
+| `getCollateral({amount})` | Provider | **DEPRECATED** in CIP-30 in favour of **CIP-40** collateral-output tx fields, but still implement (ADA-only UTxOs, ~5 ADA) — dApps in the wild continue to call it. |
 | `signTx(tx, partialSign?)` | Signer | **Return only the `transaction_witness_set`**, not the whole tx. Per-call consent! |
 | `signData(addr, payload)` | COSE (§8) | `{signature, key}` |
 | `submitTx(tx)` | Provider | → `hash32` |
@@ -282,6 +283,19 @@ After `enable()` (origin persisted in the allowlist) the full API is granted. **
 **CIP-95 (Conway/governance):** via `enable({extensions:[{cip:95}]})`. Methods under `api.cip95.*`:
 `getPubDRepKey()`, `getRegisteredPubStakeKeys()`, `getUnregisteredPubStakeKeys()`, `signData(addr|DRepID, payload)`;
 `signTx` must witness Conway certs (vote delegation, DRep reg/retire) and voting/proposal procedures.
+> `getRegisteredPubStakeKeys()` is intentionally **un-namespaced** (no `cip95.` prefix) per the CIP-95 spec — keep that exact name.
+
+**Extension negotiation is generic.** An extension is a plain `{ cip: N }` object (integer, **no leading zeros**),
+queried at runtime via `getExtensions()`, and its endpoints live under `api.cipNN.*` (e.g. `api.cip95.*`). Build the
+inpage provider's extension dispatch **generically** off `supportedExtensions`, not hard-wired to CIP-95 — every future
+capability rides this same mechanism. The official CIP-30 extensions register currently lists **exactly four**:
+
+| Ext | Purpose | Status | Scope for us |
+|---|---|---|---|
+| **CIP-95** | Conway governance | Active | **Must-have** — GovTool refuses to connect without it; shipped by Eternl, Lace, Yoroi, NuFi, Vespr, Typhon. |
+| **CIP-103** | Bulk / chained tx signing (`api.cip103.signTxs` / `submitTxs`) | Active | **Should-have** — only if we target DeFi/batch dApps; one approval for a chain of txs. See §14 defer decision. |
+| **CIP-104** | Account public key | Proposed | Nice-to-have. |
+| **CIP-106** | Multisig (native-script) — **disables** `signTx`/`signData`, replaces with `submitUnsignedTx`/`getCompletedTx` | Proposed | Out of scope while we are single-sig. Pairs with CIP-1854. |
 
 ---
 
@@ -290,6 +304,14 @@ After `enable()` (origin persisted in the allowlist) the full API is granted. **
 1. **Vault encryption:** prefer **Argon2id** (OWASP min `m=19456 KiB, t=2, p=1`, higher for a seed).
    If Web-Crypto/FIPS only: PBKDF2-HMAC-SHA256 **≥600,000** iterations. Store KDF params in vault metadata
    (forward migration). Cipher **AES-256-GCM**, 32-byte random salt, fresh ≥12-byte IV per encryption.
+   > **Divergence from the legacy Cardano precedent — recorded deliberately.** The historical wallet vault
+   > standard is **EMIP-003** (Daedalus/Yoroi): **PBKDF2-HMAC-SHA512 at 19,162 iterations** + **ChaCha20Poly1305**
+   > AEAD. We diverge on both axes on purpose: (a) **AES-256-GCM** over ChaCha20Poly1305 — both are sound AEADs;
+   > AES-GCM is available directly in `crypto.subtle` (no extra dependency, honours CLAUDE.md §1.9), whereas a
+   > pure-JS ChaCha20Poly1305 would add attack surface. (b) **Iteration count:** EMIP-003's 19,162 is *far* below
+   > current OWASP guidance — we target **≥600,000** PBKDF2-HMAC-SHA256 (or Argon2id), an order of magnitude higher.
+   > Net: our vault is **not** EMIP-003 wire-compatible (we cannot import a raw Daedalus/Yoroi secret-key blob without
+   > a dedicated converter), which is acceptable because import is via **mnemonic** (CIP-1852), not raw vault blob.
 2. **Storage:** encrypted vault in `chrome.storage.local` (or IndexedDB). **Never `localStorage`**
    (unavailable in the SW, synchronous, trivially readable). Decrypted keyring only in SW RAM. Key cache in `storage.session`.
 3. **Per-call consent:** CIP-30 mandates it — confirm **every** `signTx`/`signData` via the trusted popup.
@@ -343,6 +365,28 @@ After `enable()` (origin persisted in the allowlist) the full API is granted. **
 `CIP-1852 + CIP-105` (HD core) → `CIP-30 + CIP-8` (bridge/signing) → `CIP-95` (governance extension)
 → `CIP-31/32/33` (tx decoder for dApp txs) + `CIP-25/68` (NFT display). `CIP-1694` as the governance domain model.
 
+**Optional / later (status from the cardano-foundation/CIPs register, verified 2026-06):**
+- `CIP-103` (bulk tx signing) — *Active*, **should-have** for DeFi UX; defer decision in §14.
+- `CIP-1854` (multisig HD) + `CIP-106` (multisig connector) — *Active / Proposed*, **only if multisig becomes a product goal**; both out of scope for single-sig v1.
+- `CIP-104` (account pub-key extension) — *Proposed*, nice-to-have.
+
+**Asset / metadata / messaging CIPs (standards review round 2, 2026-06 — all *Active*, primary-source confirmed).**
+These are *display/build* concerns, not connector methods — they ride the tx decoder, asset views, and
+Plutus build. Priority for a self-custody wallet:
+
+| CIP | Label / fields | Priority | Where it lands |
+|---|---|---|---|
+| **CIP-40** Collateral output | tx-body `collateral_return` (16) + `total_collateral` (17) | **MUST** (Plutus/script spend) | M5 — **covered**: `plutusBuild.ts` passes `collaterals` + `changeAddress` to buildooor's `TxBuilder.buildSync`, which sets both fields. Supersedes the CIP-30 `getCollateral` pattern. |
+| **CIP-25** NFT metadata (v1/v2) | metadata label `721`, mint-time | **SHOULD** | tx decoder + asset view — render NFT name/image. |
+| **CIP-68** Datum metadata | ref-NFT `100` + user `222`/`333`/`444`, same policy | **SHOULD** | asset view — decode modern NFT/FT metadata from the reference-NFT datum (read via provider). |
+| **CIP-20** Tx message/memo | metadata label `674`, `msg:[…]` ≤64 B/line | **SHOULD** | tx history (render incoming memos); optional "attach memo" on send. |
+| **CIP-67** Asset-name label registry | 4-byte name prefix `[0000|label|CRC8|0000]` | NICE | only to parse/strip CIP-68 label prefixes for display. |
+| **CIP-83** Encrypted tx messages | addendum to CIP-20, label `674` + `enc` (basic = AES-256-CBC) | NICE | optional decode of encrypted memos; non-decoding just shows ciphertext. |
+| **CIP-36 / CIP-15** Catalyst voting registration | metadata `61284`/`61285` | NICE (open) | only if we add Catalyst voting — unresolved in the review; treat as out-of-scope until product asks. |
+
+> CIP-40 vs `getCollateral`: we keep the deprecated `getCollateral` handler for dApp compatibility
+> (T4.8) **and** build correct collateral-output fields ourselves on Plutus spends (M5).
+
 ---
 
 ## 13. Reusable Code from the ODATANO Repo (reference only, not a dependency)
@@ -364,7 +408,20 @@ After `enable()` (origin persisted in the allowlist) the full API is granted. **
 - **Argon2id in the browser:** SubtleCrypto has no Argon2 → a WASM build (`argon2-browser`/`hash-wasm`)
   would force `'wasm-unsafe-eval'` and thereby negate the CSP advantage of the pure-JS stack.
   **Trade-off:** either PBKDF2-≥600k (Web Crypto, no CSP compromise) **or** Argon2id accepts a narrow
-  `'wasm-unsafe-eval'`. Decide early.
+  `'wasm-unsafe-eval'`. Decide early. **Resolved in EXECUTION_PLAN T1.1 → PBKDF2-≥600k.** The legacy
+  Cardano precedent (EMIP-003: PBKDF2-SHA512 @ 19,162 + ChaCha20Poly1305) is **not** adopted — see §10.1
+  for the recorded divergence and rationale.
+  > **Standards review confirmation (2026-06, OWASP Password Storage Cheat Sheet):** OWASP ranks
+  > Argon2id first (`m=19456 KiB, t=2, p=1`), scrypt second, and lists **PBKDF2-HMAC-SHA256 @ 600,000
+  > as the FIPS-140-aligned choice**. Our PBKDF2-SHA256-≥600k **exactly meets OWASP's PBKDF2 floor**.
+  > Argon2id is the only "better" tier, and a pure-JS Argon2id either pulls in WASM (violates §1.9) or
+  > is too slow — so **PBKDF2-≥600k stays the default**. Re-open only if an audited pure-JS Argon2id
+  > compatible with `script-src 'self'` appears. (Open: the round did not extract the *current* shipped
+  > KDF numbers from Lace/Eternl/Nami/Yoroi — OWASP is the anchor, not a competitor's parameter.)
+- **CIP-103 (bulk tx signing) — defer decision.** *Active* extension, but real-world dApp adoption of
+  `api.cip103.signTxs()` is unverified (open question from the standards review). **Decision: defer to
+  post-v1**, behind the generic extension-dispatch mechanism (§9) so it is a pure add-on when a target dApp
+  actually requires it — no architectural debt from waiting. Re-evaluate once a concrete DeFi integration asks for it.
 - **Plutus ex-units without your own Ogmios infra:** Blockfrost/Koios don't offer a full `evaluateTransaction`
   like Ogmios → plan Ogmios+Kupo for M5, or ensure a provider eval endpoint.
 - **buildooor CJS bundling in an MV3 SW (`type:module`):** verify interop early in M0.

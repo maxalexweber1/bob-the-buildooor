@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Allowlist } from '../src/background/dapp/allowlist';
+import { Allowlist, ALLOWLIST_STORAGE_KEY } from '../src/background/dapp/allowlist';
 import type { KeyValueStore } from '../src/background/storage';
 
 class MemoryStore implements KeyValueStore {
@@ -44,5 +44,32 @@ describe('Allowlist (T4.1)', () => {
     await a.remove(X);
     expect(await a.list()).toEqual([Y]);
     expect(await a.has(X)).toBe(false);
+  });
+
+  it('records and returns per-origin extensions (T4.6)', async () => {
+    await a.add(X, [95]);
+    await a.add(Y); // defaults to none
+    expect(await a.getExtensions(X)).toEqual([95]);
+    expect(await a.getExtensions(Y)).toEqual([]);
+    expect(await a.getExtensions('https://unknown.example')).toEqual([]);
+  });
+
+  it('re-adding replaces the granted extensions (T4.6)', async () => {
+    await a.add(X, [95]);
+    await a.add(X, []); // dApp re-enables without governance
+    expect(await a.getExtensions(X)).toEqual([]);
+    expect(await a.has(X)).toBe(true);
+  });
+
+  it('migrates the legacy string[] format transparently (T4.6)', async () => {
+    const store = new MemoryStore();
+    await store.set(ALLOWLIST_STORAGE_KEY, [X, Y]); // pre-T4.6 origins-only shape
+    const migrated = new Allowlist(store);
+    expect(await migrated.list()).toEqual([X, Y]);
+    expect(await migrated.has(X)).toBe(true);
+    expect(await migrated.getExtensions(X)).toEqual([]);
+    // a write persists the migrated map shape
+    await migrated.add(X, [95]);
+    expect(await migrated.getExtensions(X)).toEqual([95]);
   });
 });
