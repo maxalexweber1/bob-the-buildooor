@@ -1,4 +1,4 @@
-// Regression guard against the "SecondFi" class of Ed25519 bug (Coinspect finding, 2025).
+// Regression guard against the "SecondFi" class of Ed25519 bug 2026
 //
 // Ed25519 (CIP-1852 / RFC 8032) derives its per-signature nonce as
 //     r = H( secret_prefix || message )
@@ -31,7 +31,7 @@ describe('Ed25519 nonce integrity (SecondFi regression)', () => {
     expect(sig.length).toBe(64);
     expect(toHex(sig)).toBe(
       '1e43fe1db70b6c9590e977aba779b0a6da97d2539eceeadc89b497148594f292' +
-        '767078404723202b83283fb4aa4ef3c5715d8b9ad534eac89fede039322bae04',
+      '767078404723202b83283fb4aa4ef3c5715d8b9ad534eac89fede039322bae04',
     );
   });
 
@@ -45,7 +45,7 @@ describe('Ed25519 nonce integrity (SecondFi regression)', () => {
   });
 
   it('is deterministic: identical key + message reproduce the identical signature', () => {
-    // Determinism is the *intended* property (no RNG). It must come from H(secret || message),
+    // Determinism is the *intended* property. It must come from H(secret || message),
     // which the two checks above pin down to the secret-dependent form.
     expect(toHex(sigOf(key0, MSG))).toBe(toHex(sigOf(key0, MSG)));
   });
