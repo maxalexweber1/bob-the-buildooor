@@ -3,14 +3,18 @@
 // (many CIP-25/68 tokens use ASCII); non-printable names stay hex. No chrome.*, fully unit-testable.
 import type { UTxO } from '@harmoniclabs/buildooor';
 import { fromHex } from './crypto/encoding';
+import { parseCip67 } from './cip67';
 
 export interface AssetBalance {
   /** policyId(56 hex) + assetName(hex). */
   unit: string;
   policyId: string;
+  /** Full on-chain asset name (hex), including any CIP-67 label prefix. */
   assetNameHex: string;
-  /** UTF-8 decode of the asset name when it's printable ASCII; omitted otherwise. */
+  /** UTF-8 decode of the asset name (CIP-67 prefix stripped first) when printable; omitted otherwise. */
   assetNameUtf8?: string;
+  /** CIP-67 label (e.g. 100 ref-NFT, 222 NFT, 333 FT, 444 RFT) when the name carries a valid prefix. */
+  cip67Label?: number;
   quantity: string;
 }
 
@@ -44,9 +48,17 @@ function finalize(lovelace: bigint, assets: Map<string, bigint>): TokenBundle {
   const list: AssetBalance[] = [...assets.entries()].map(([unit, qty]) => {
     const policyId = unit.slice(0, 56);
     const assetNameHex = unit.slice(56);
-    const utf8 = decodeAssetName(assetNameHex);
-    const base: AssetBalance = { unit, policyId, assetNameHex, quantity: qty.toString() };
-    return utf8 === undefined ? base : { ...base, assetNameUtf8: utf8 };
+    // CIP-68 tokens carry a CIP-67 label prefix; decode the readable name from the content after it.
+    const cip67 = parseCip67(assetNameHex);
+    const utf8 = decodeAssetName(cip67 ? cip67.contentHex : assetNameHex);
+    return {
+      unit,
+      policyId,
+      assetNameHex,
+      quantity: qty.toString(),
+      ...(utf8 !== undefined ? { assetNameUtf8: utf8 } : {}),
+      ...(cip67 !== undefined ? { cip67Label: cip67.label } : {}),
+    };
   });
   return { lovelace: lovelace.toString(), assets: list };
 }

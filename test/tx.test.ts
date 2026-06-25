@@ -45,6 +45,58 @@ describe('buildSend (T3.1)', () => {
       buildSend(ctxWith(10_000_000n), { toAddress: mainnetAddr, lovelace: 3_000_000n }),
     ).toThrow(/network/);
   });
+
+  it('attaches a CIP-20 memo that decodes back in the summary (T4.12b)', () => {
+    const ctx = ctxWith(10_000_000n);
+    const tx = buildSend(ctx, { toAddress: RECIPIENT, lovelace: 3_000_000n }, { memo: 'thanks for lunch' });
+    expect(summarizeTx(tx, ctx.utxos, new Set([ownAddr])).message).toEqual({
+      lines: ['thanks for lunch'],
+      encrypted: false,
+    });
+  });
+
+  it('splits a long memo into ≤64-byte CIP-20 lines', () => {
+    const ctx = ctxWith(10_000_000n);
+    const long = 'x'.repeat(120);
+    const tx = buildSend(ctx, { toAddress: RECIPIENT, lovelace: 3_000_000n }, { memo: long });
+    const lines = summarizeTx(tx, ctx.utxos, new Set([ownAddr])).message?.lines ?? [];
+    expect(lines.length).toBe(2);
+    expect(lines.join('')).toBe(long);
+  });
+
+  it('rejects a memo over the byte cap', () => {
+    expect(() =>
+      buildSend(ctxWith(10_000_000n), { toAddress: RECIPIENT, lovelace: 3_000_000n }, { memo: 'z'.repeat(300) }),
+    ).toThrow(/memo too long/);
+  });
+
+  it('omits aux data when no memo is given (no false metadata flag)', () => {
+    const ctx = ctxWith(10_000_000n);
+    const tx = buildSend(ctx, { toAddress: RECIPIENT, lovelace: 3_000_000n });
+    const summary = summarizeTx(tx, ctx.utxos, new Set([ownAddr]));
+    expect(summary.message).toBeUndefined();
+    expect(summary.flags.metadata).toBe(false);
+  });
+});
+
+describe('Conway governance decode end-to-end (T6.2, patched ledger-ts)', () => {
+  // A real buildooor-built tx with a Conway vote-delegation cert (delegate voting power to Always
+  // Abstain). Parsing this needs the TxBody Certificate dual-class repoint in our patch — on the
+  // unpatched lib `Tx.fromCbor` throws / the cert can't round-trip. Proves the patch + the decoder.
+  const GOV_TX_HEX =
+    '84a50081825820aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa00018' +
+    '1a20058390032b3270fd1561cec0aa24b4aec6850cd0196486033e3dd849945c319ace819f4175c9c04' +
+    '9239a91c9c07ece20bf7e7485d7cd414e721a5fc011a0095f81f021a00029e6104818309820058' +
+    '1c1111111111111111111111111111111111111111111111111111111181020f00a0f5f6';
+
+  it('parses a Conway vote-delegation tx and decodes the certificate in the summary', () => {
+    const tx = Tx.fromCbor(GOV_TX_HEX);
+    const summary = summarizeTx(tx, [], new Set());
+    expect(summary.certificates).toEqual([
+      { type: 'VoteDeleg', description: 'Delegate voting power to Always Abstain' },
+    ]);
+    expect(summary.flags.certificates).toBe(true);
+  });
 });
 
 describe('summarizeTx (T3.3 — decode for approval)', () => {

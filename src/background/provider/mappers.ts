@@ -103,3 +103,24 @@ export function costModelsFromArrays(v: {
   if (v.v3) out.PlutusScriptV3 = toCostModelV3(v.v3 as Parameters<typeof toCostModelV3>[0]);
   return out;
 }
+
+// ---- Asset display-metadata field pickers (shared by Blockfrost & Koios getAssetMetadata) ----
+// Provider asset metadata is freeform JSON; pick known display fields defensively (trust-no-input).
+
+/** Non-empty string, else undefined. */
+export function pickString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+/** Finite number, else undefined. */
+export function pickNumber(v: unknown): number | undefined {
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+/** Image URI: a plain string, or a CIP-25 v1 chunked string[] joined into one URI. */
+export function joinImageUri(v: unknown): string | undefined {
+  if (typeof v === 'string') return v.length > 0 ? v : undefined;
+  if (Array.isArray(v)) {
+    const joined = v.filter((x): x is string => typeof x === 'string').join('');
+    return joined.length > 0 ? joined : undefined;
+  }
+  return undefined;
+}

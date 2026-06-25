@@ -54,7 +54,11 @@ export default defineManifest({
   content_security_policy: {
     // script-src 'self' (no wasm-unsafe-eval — pure-JS stack) is the core structural defense.
     // frame-ancestors 'none' hardens against clickjacking of the approval/unlock pages.
-    extension_pages: "script-src 'self'; object-src 'self'; frame-ancestors 'none';",
+    // img-src 'self' data:  (A2) — the popup renders ONLY bundled images and the `data:` URIs the SW
+    //   produces from NFT art (background/assetImage.ts). It never loads a remote image directly, so
+    //   this tightens the previously-implicit-open img directive without enabling third-party img loads.
+    //   connect-src is intentionally left unset: provider/gateway endpoints are user-configurable.
+    extension_pages: "script-src 'self'; object-src 'self'; img-src 'self' data:; frame-ancestors 'none';",
   },
 
   icons: {

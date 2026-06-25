@@ -4,9 +4,9 @@
 // cardano-cli-shaped /cli_protocol_params (its field names line up with buildooor's ProtocolParameters).
 import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolParameters, type UTxO } from '@harmoniclabs/buildooor';
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
-import { type AddressTxRef, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
+import { type AddressTxRef, type AssetMetadata, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
 import { DEFAULT_TIMEOUT_MS, KOIOS_BASE_URL, fetchJson, genesisInfosFor } from './network';
-import { costModelsFromArrays, mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
+import { costModelsFromArrays, mergeProtocolParameters, toUtxo, pickString, pickNumber, joinImageUri, type AmountUnit } from './mappers';
 
 interface KoiosUtxoRow {
   tx_hash: string;
@@ -33,6 +33,26 @@ interface KoiosCliParams {
   maxBlockExecutionUnits: { memory: number; steps: number };
   protocolVersion: { major: number; minor: number };
   costModels?: { PlutusV1?: number[]; PlutusV2?: number[]; PlutusV3?: number[] } | null;
+}
+
+/**
+ * Pull an asset's CIP-25 metadata object out of Koios's raw `minting_tx_metadata` (label 721), which
+ * is nested `{ "721": { <policyId>: { <assetNameKey>: { name, image, … } } } }`. The inner key may be
+ * the ASCII or hex asset name, so we take the first entry under the policy that carries display fields.
+ */
+function cip25From721(meta: unknown, policyId: string): Record<string, unknown> | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const label = (meta as Record<string, unknown>)['721'];
+  if (typeof label !== 'object' || label === null) return undefined;
+  const byPolicy = (label as Record<string, unknown>)[policyId];
+  if (typeof byPolicy !== 'object' || byPolicy === null) return undefined;
+  for (const v of Object.values(byPolicy as Record<string, unknown>)) {
+    if (typeof v === 'object' && v !== null) {
+      const o = v as Record<string, unknown>;
+      if ('name' in o || 'image' in o || 'description' in o) return o;
+    }
+  }
+  return undefined;
 }
 
 function rowToRaw(row: KoiosUtxoRow, fallbackAddress: string): { txHash: string; outputIndex: number; address: string; amount: AmountUnit[] } {
@@ -188,6 +208,31 @@ export class KoiosProvider implements IChainProvider {
       outputs: (tx.outputs ?? []).map(party),
       ...(tx.fee !== undefined ? { fee: String(tx.fee) } : {}),
     };
+  }
+
+  /** Display metadata for an asset: CIP-25 (raw 721 minting metadata) with off-chain registry fallback. */
+  async getAssetMetadata(unit: string): Promise<AssetMetadata | null> {
+    if (!/^[0-9a-f]{56,120}$/i.test(unit)) return null;
+    const policyId = unit.slice(0, 56);
+    const assetNameHex = unit.slice(56);
+    const rows = await this.post<
+      Array<{ minting_tx_metadata?: unknown; token_registry_metadata?: Record<string, unknown> | null }>
+    >('/asset_info', { _asset_list: [[policyId, assetNameHex]] });
+    const row = rows?.[0];
+    if (!row) return null;
+    const on = cip25From721(row.minting_tx_metadata, policyId);
+    const off = row.token_registry_metadata ?? undefined;
+    const md: AssetMetadata = {};
+    const name = pickString(on?.name) ?? pickString(off?.name);
+    const description = pickString(on?.description) ?? pickString(off?.description);
+    const image = joinImageUri(on?.image) ?? joinImageUri(off?.logo);
+    const decimals = pickNumber(off?.decimals);
+    if (name !== undefined) md.name = name;
+    if (description !== undefined) md.description = description;
+    if (image !== undefined) md.image = image;
+    if (decimals !== undefined) md.decimals = decimals;
+    if (on !== undefined) md.standard = 'CIP25';
+    return Object.keys(md).length > 0 ? md : null;
   }
 
   // No evaluateTx — Koios has no ledger-state script eval; use Ogmios for Plutus ex-units (M5).

@@ -1,12 +1,14 @@
 // Read-only dashboard (T2.5): live balance, native assets, receive address, provider status, network
 // switch. All chain/asset strings render as React text nodes only (CLAUDE.md §1.8). Privileged context.
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWallet } from './store';
 import { wallet } from '../shared/walletClient';
-import type { WalletOverview } from '../shared/internal';
+import type { WalletOverview, AssetMetadata } from '../shared/internal';
+import type { AssetBalance } from '../core/balance';
 import type { Network } from '../background/provider/IChainProvider';
 import { primaryButton } from './App';
 import { formatAda, shortId, TokenAvatar, ProviderBadge, card } from './ui';
+import { cip67LabelName } from '../core/cip67';
 
 const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
 
@@ -17,6 +19,14 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Lazily-fetched CIP-25/68 display metadata, keyed by asset unit. `fetched` guards against re-querying.
+  const [assetMeta, setAssetMeta] = useState<Record<string, AssetMetadata>>({});
+  const fetched = useRef<Set<string>>(new Set());
+  // NFT art as `data:` URIs (the SW proxies + validates the fetch — background/assetImage.ts).
+  const [assetImg, setAssetImg] = useState<Record<string, string>>({});
+  const imgFetched = useRef<Set<string>>(new Set());
+  // The asset shown in the detail overlay (name, image, description, ids), or null.
+  const [detail, setDetail] = useState<AssetBalance | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,12 +45,60 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
     void load();
   }, [load]);
 
+  // Lazily resolve token display names (CIP-25/68) for the visible assets. Sequential on purpose: the
+  // background metadata cache is a storage read-modify-write, so parallel calls would clobber writes.
+  useEffect(() => {
+    if (!overview) return;
+    let cancelled = false;
+    void (async () => {
+      for (const a of overview.balance.assets) {
+        if (fetched.current.has(a.unit)) continue;
+        fetched.current.add(a.unit);
+        try {
+          const md = await wallet.getAssetMetadata(a.unit);
+          if (!cancelled && md?.name) setAssetMeta((m) => ({ ...m, [a.unit]: md }));
+        } catch {
+          // ignore — fall back to the on-chain asset name
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [overview]);
+
+  // Once an asset's metadata (with an image URI) is in, lazily fetch the art via the SW proxy. Sequential
+  // and ref-guarded so we hit each gateway URL at most once.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      for (const [unit, md] of Object.entries(assetMeta)) {
+        if (md.image === undefined || imgFetched.current.has(unit)) continue;
+        imgFetched.current.add(unit);
+        try {
+          const dataUri = await wallet.getAssetImage(md.image);
+          if (!cancelled && dataUri) setAssetImg((m) => ({ ...m, [unit]: dataUri }));
+        } catch {
+          // ignore — fall back to the generated avatar
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [assetMeta]);
+
   async function changeNetwork(n: Network) {
     setLoading(true);
     setError(null);
     try {
       await wallet.updateSettings({ network: n });
       setNetwork(n);
+      // Asset metadata is network-specific — drop what we resolved for the previous network.
+      fetched.current.clear();
+      setAssetMeta({});
+      imgFetched.current.clear();
+      setAssetImg({});
       setOverview(await wallet.getOverview());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to switch network');
@@ -97,11 +155,21 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
           </div>
           <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 160, overflowY: 'auto' }}>
             {overview.balance.assets.map((a) => {
-              const name = a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+              // Prefer the resolved CIP-25/68 display name; fall back to the on-chain (UTF-8) name, then hex.
+              const name = assetMeta[a.unit]?.name ?? a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+              const badge = a.cip67Label === undefined ? undefined : cip67LabelName(a.cip67Label);
               return (
-                <li key={a.unit} style={assetRow}>
-                  <TokenAvatar policyId={a.policyId} label={name} />
-                  <span style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                <li
+                  key={a.unit}
+                  style={{ ...assetRow, cursor: 'pointer' }}
+                  onClick={() => setDetail(a)}
+                  title="View details"
+                >
+                  <TokenAvatar policyId={a.policyId} label={name} image={assetImg[a.unit]} />
+                  <span style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {name}
+                    {badge && <span style={tokenBadge}>{badge}</span>}
+                  </span>
                   <span style={{ fontSize: 13, color: '#4a5568' }}>{a.quantity}</span>
                 </li>
               );
@@ -133,6 +201,69 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
           Lock
         </button>
       </div>
+
+      {detail && (
+        <AssetDetail
+          a={detail}
+          meta={assetMeta[detail.unit]}
+          image={assetImg[detail.unit]}
+          onClose={() => setDetail(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/** Detail overlay for one native asset: art, decoded name + class, description, and on-chain ids.
+ *  All external strings (name/description) render as React text nodes only (CLAUDE.md §1.8/§8). */
+function AssetDetail({
+  a,
+  meta,
+  image,
+  onClose,
+}: {
+  a: AssetBalance;
+  meta: AssetMetadata | undefined;
+  image: string | undefined;
+  onClose: () => void;
+}) {
+  const name = meta?.name ?? a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+  const badge = a.cip67Label === undefined ? undefined : cip67LabelName(a.cip67Label);
+  return (
+    <div style={overlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <button type="button" aria-label="Close" style={closeBtn} onClick={onClose}>
+          ×
+        </button>
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }}>
+          <TokenAvatar policyId={a.policyId} label={name} image={image} size={96} />
+        </div>
+        <div style={{ fontWeight: 700, fontSize: 16, textAlign: 'center' }}>
+          {name}
+          {badge && <span style={tokenBadge}>{badge}</span>}
+        </div>
+        {meta?.description && (
+          <p style={{ fontSize: 13, color: '#4a5568', marginTop: 8 }}>{meta.description}</p>
+        )}
+        <div style={detailRow}>
+          <span>Quantity</span>
+          <span>{a.quantity}</span>
+        </div>
+        {meta?.decimals !== undefined && (
+          <div style={detailRow}>
+            <span>Decimals</span>
+            <span>{meta.decimals}</span>
+          </div>
+        )}
+        <div style={detailRow}>
+          <span>Policy</span>
+          <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{a.policyId}</code>
+        </div>
+        <div style={detailRow}>
+          <span>Asset name</span>
+          <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{a.assetNameHex || '(empty)'}</code>
+        </div>
+      </div>
     </div>
   );
 }
@@ -152,4 +283,56 @@ const copyBtn: React.CSSProperties = {
   borderRadius: 5,
   padding: '2px 8px',
   cursor: 'pointer',
+};
+const tokenBadge: React.CSSProperties = {
+  marginLeft: 6,
+  fontSize: 10,
+  fontWeight: 600,
+  color: '#4a5568',
+  background: '#edf2f7',
+  borderRadius: 4,
+  padding: '1px 5px',
+  verticalAlign: 'middle',
+};
+const overlay: React.CSSProperties = {
+  position: 'fixed',
+  inset: 0,
+  background: 'rgba(0,0,0,0.45)',
+  display: 'flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  padding: 16,
+  zIndex: 50,
+};
+const modalCard: React.CSSProperties = {
+  position: 'relative',
+  background: '#fff',
+  borderRadius: 12,
+  padding: 18,
+  width: '100%',
+  maxWidth: 320,
+  maxHeight: '90%',
+  overflowY: 'auto',
+  boxShadow: '0 10px 30px rgba(0,0,0,0.25)',
+};
+const closeBtn: React.CSSProperties = {
+  position: 'absolute',
+  top: 8,
+  right: 10,
+  border: 'none',
+  background: 'transparent',
+  fontSize: 22,
+  lineHeight: 1,
+  color: '#718096',
+  cursor: 'pointer',
+};
+const detailRow: React.CSSProperties = {
+  display: 'flex',
+  justifyContent: 'space-between',
+  gap: 10,
+  fontSize: 12,
+  color: '#4a5568',
+  borderTop: '1px solid #edf2f7',
+  padding: '6px 0',
+  marginTop: 4,
 };

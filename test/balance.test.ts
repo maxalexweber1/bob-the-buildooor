@@ -46,6 +46,23 @@ describe('aggregateBalance (T2.5)', () => {
     expect(b.assets[0]?.assetNameHex).toBe(NONPRINT);
   });
 
+  it('strips a CIP-67 prefix and decodes the CIP-68 token name + label', () => {
+    const CIP68_NFT = '000de140' + Buffer.from('Test', 'utf8').toString('hex'); // label 222 + "Test"
+    const b = aggregateBalance([utxo(TX, 0, [{ unit: 'lovelace', quantity: '2000000' }, { unit: POLICY + CIP68_NFT, quantity: '1' }])]);
+    expect(b.assets[0]).toMatchObject({
+      unit: POLICY + CIP68_NFT,
+      assetNameHex: CIP68_NFT, // full on-chain name retained
+      assetNameUtf8: 'Test', // readable name from the content after the prefix
+      cip67Label: 222,
+    });
+  });
+
+  it('does not set cip67Label for an ordinary (non-CIP-68) asset name', () => {
+    const b = aggregateBalance([utxo(TX, 0, [{ unit: 'lovelace', quantity: '2000000' }, { unit: POLICY + SNFT, quantity: '1' }])]);
+    expect(b.assets[0]?.cip67Label).toBeUndefined();
+    expect(b.assets[0]?.assetNameUtf8).toBe('SNFT');
+  });
+
   it('is empty for no UTxOs', () => {
     expect(aggregateBalance([])).toEqual({ lovelace: '0', assets: [] });
   });

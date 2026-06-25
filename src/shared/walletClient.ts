@@ -14,6 +14,7 @@ import {
   type HistoryEntry,
   type UtxoView,
   type TxStatus,
+  type AssetMetadata,
 } from './internal';
 
 async function send<T>(command: WalletCommand): Promise<T> {
@@ -39,8 +40,8 @@ export const wallet = {
   updateSettings: (patch: Partial<WalletSettings>) =>
     send<WalletSettings>({ type: 'updateSettings', patch }),
   pingProvider: () => send<ChainTip>({ type: 'pingProvider' }),
-  buildSend: (toAddress: string, lovelace: string) =>
-    send<BuiltTx>({ type: 'buildSend', toAddress, lovelace }),
+  buildSend: (toAddress: string, lovelace: string, memo?: string) =>
+    send<BuiltTx>({ type: 'buildSend', toAddress, lovelace, ...(memo !== undefined ? { memo } : {}) }),
   approveSend: (id: string) => send<SubmitResult>({ type: 'approveSend', id }),
   cancelSend: () => send<void>({ type: 'cancelSend' }),
   getPendingApproval: (reqId: string) =>
@@ -52,4 +53,6 @@ export const wallet = {
   getHistory: () => send<HistoryEntry[]>({ type: 'getHistory' }),
   listUtxos: () => send<UtxoView[]>({ type: 'listUtxos' }),
   getTxStatus: (txHash: string) => send<TxStatus>({ type: 'getTxStatus', txHash }),
+  getAssetMetadata: (unit: string) => send<AssetMetadata | null>({ type: 'getAssetMetadata', unit }),
+  getAssetImage: (uri: string) => send<string | null>({ type: 'getAssetImage', uri }),
 };

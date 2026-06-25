@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { TxBuilder, defaultPreviewGenesisInfos } from '@harmoniclabs/buildooor';
 import { BlockfrostProvider } from '../src/background/provider/blockfrost';
+import { KoiosProvider } from '../src/background/provider/koios';
 import { OgmiosProvider } from '../src/background/provider/ogmios';
 import { createProvider } from '../src/background/provider/index';
 import { ogmiosValueToUnits, parseRatio } from '../src/background/provider/mappers';
@@ -143,6 +144,73 @@ describe('BlockfrostProvider (mocked fetch)', () => {
     expect(await p.isConfirmed(TXID)).toBe(true);
     vi.stubGlobal('fetch', vi.fn(async () => res('Not Found', 404)));
     expect(await p.isConfirmed(TXID)).toBe(false);
+  });
+
+  it('getAssetMetadata: CIP-25 on-chain name/image/standard', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res({
+      onchain_metadata: { name: 'Bob #1', image: 'ipfs://Qm123', description: 'a test NFT' },
+      onchain_metadata_standard: 'CIP25v2',
+      metadata: null,
+    })));
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    expect(await p.getAssetMetadata(ASSET)).toEqual({
+      name: 'Bob #1',
+      description: 'a test NFT',
+      image: 'ipfs://Qm123',
+      standard: 'CIP25v2',
+    });
+  });
+
+  it('getAssetMetadata: joins a CIP-25 v1 chunked image array', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res({
+      onchain_metadata: { name: 'Chunked', image: ['ipfs://Qm', 'abc', 'def'] },
+    })));
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    expect((await p.getAssetMetadata(ASSET))?.image).toBe('ipfs://Qmabcdef');
+  });
+
+  it('getAssetMetadata: falls back to the off-chain registry (name/decimals/logo)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res({
+      onchain_metadata: null,
+      metadata: { name: 'TestCoin', decimals: 6, logo: 'https://x/logo.png' },
+    })));
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    expect(await p.getAssetMetadata(ASSET)).toEqual({ name: 'TestCoin', decimals: 6, image: 'https://x/logo.png' });
+  });
+
+  it('getAssetMetadata: 404 → null, and an asset with no useful fields → null', async () => {
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    vi.stubGlobal('fetch', vi.fn(async () => res('Not Found', 404)));
+    expect(await p.getAssetMetadata(ASSET)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn(async () => res({ onchain_metadata: null, metadata: null })));
+    expect(await p.getAssetMetadata(ASSET)).toBeNull();
+  });
+
+  it('Koios getAssetMetadata: CIP-25 from raw 721 minting metadata', async () => {
+    const policy = ASSET.slice(0, 56);
+    vi.stubGlobal('fetch', vi.fn(async () => res([{
+      minting_tx_metadata: { '721': { [policy]: { SNFT: { name: 'Bob #1', image: 'ipfs://Qm', description: 'd' } } } },
+      token_registry_metadata: null,
+    }])));
+    const p = new KoiosProvider('preview');
+    expect(await p.getAssetMetadata(ASSET)).toEqual({ name: 'Bob #1', description: 'd', image: 'ipfs://Qm', standard: 'CIP25' });
+  });
+
+  it('Koios getAssetMetadata: off-chain registry fallback (name/decimals/logo)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res([{
+      minting_tx_metadata: null,
+      token_registry_metadata: { name: 'TestCoin', decimals: 6, logo: 'https://x/logo.png' },
+    }])));
+    const p = new KoiosProvider('preview');
+    expect(await p.getAssetMetadata(ASSET)).toEqual({ name: 'TestCoin', decimals: 6, image: 'https://x/logo.png' });
+  });
+
+  it('Koios getAssetMetadata: no row or no useful fields → null', async () => {
+    const p = new KoiosProvider('preview');
+    vi.stubGlobal('fetch', vi.fn(async () => res([])));
+    expect(await p.getAssetMetadata(ASSET)).toBeNull();
+    vi.stubGlobal('fetch', vi.fn(async () => res([{ minting_tx_metadata: null, token_registry_metadata: null }])));
+    expect(await p.getAssetMetadata(ASSET)).toBeNull();
   });
 
   it('getAddressTransactions maps refs (newest-first as the API returns them)', async () => {

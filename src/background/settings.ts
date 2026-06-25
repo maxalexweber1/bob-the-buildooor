@@ -15,10 +15,16 @@ export interface WalletSettings {
   koiosApiKey?: string | undefined;
   /** Optional custom/self-hosted Koios base URL (incl. API path). Overrides env + the public default. */
   koiosUrl?: string | undefined;
+  /**
+   * Fetch & show NFT images (A2). Default ON. When off, the SW never contacts the IPFS/HTTP gateway,
+   * so it can't leak the wallet's IP + which NFTs it holds — a privacy opt-out. Token NAMES (provider
+   * metadata) are unaffected; only the image fetch is gated.
+   */
+  nftImages?: boolean | undefined;
 }
 
 export const SETTINGS_STORAGE_KEY = 'bob:settings';
-export const DEFAULT_SETTINGS: WalletSettings = { network: 'preview', providerKind: 'blockfrost' };
+export const DEFAULT_SETTINGS: WalletSettings = { network: 'preview', providerKind: 'blockfrost', nftImages: true };
 
 export class Settings {
   constructor(private readonly store: KeyValueStore = chromeLocalStore) {}

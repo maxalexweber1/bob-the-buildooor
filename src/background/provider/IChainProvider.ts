@@ -39,6 +39,23 @@ export interface TxIODetail {
   fee?: string;
 }
 
+/**
+ * Display metadata for a native asset (CIP-25 on-chain / CIP-68 / off-chain CIP-26 registry). Text
+ * only — the wallet renders the name/description; `image` is captured but NOT yet shown (rendering
+ * remote/IPFS images needs a CSP `img-src` decision + privacy review, IMPLEMENTATION_PLAN §1.7/§10).
+ */
+export interface AssetMetadata {
+  /** Human display name (CIP-25/68 `name`, else off-chain registry name). */
+  name?: string;
+  description?: string;
+  /** Image URI (`ipfs://…` or `https://…`). Stored, not rendered yet. */
+  image?: string;
+  /** Decimals for fungible tokens (off-chain registry / CIP-68 333). */
+  decimals?: number;
+  /** Provider-reported standard, e.g. "CIP25v1", "CIP25v2", "CIP68v1". */
+  standard?: string;
+}
+
 /** One redeemer's execution-unit budget from an `evaluateTx` pass (Ogmios). Used by the M5 2-pass build. */
 export interface ScriptEvalResult {
   /** Redeemer pointer — Ogmios returns `{ purpose, index }` (purpose: spend|mint|publish|withdraw|vote|propose). */
@@ -72,6 +89,11 @@ export interface IChainProvider {
   getTip?(): Promise<ChainTip>;
   /** Has this tx hash been included on-chain? Drives post-submit confirmation polling (needs history). */
   isConfirmed?(txHash: string): Promise<boolean>;
+  /**
+   * Display metadata for an asset `unit` (policyId+assetNameHex). Null when unknown/unsupported. Used
+   * to show NFT/token names beyond the on-chain asset name. Kupo/Ogmios have no metadata index → omit.
+   */
+  getAssetMetadata?(unit: string): Promise<AssetMetadata | null>;
 
   // ---- transaction history (needs historic state: Blockfrost/Koios; Ogmios omits → unsupported) ----
   /** Transactions touching an address, newest first; `page` is 1-based. */

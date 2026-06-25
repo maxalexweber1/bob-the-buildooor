@@ -4,7 +4,24 @@
 import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
 import type { BuiltTx, TxStatus } from '../shared/internal';
+import type { AssetBalance } from '../core/balance';
+import { cip67LabelName } from '../core/cip67';
 import { primaryButton } from './App';
+
+/** One native-asset line in the review: stripped/decoded name + CIP-67 class badge + quantity. */
+function AssetLine({ a }: { a: AssetBalance }) {
+  const name = a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+  const badge = a.cip67Label === undefined ? undefined : cip67LabelName(a.cip67Label);
+  return (
+    <div style={assetLine}>
+      {name}
+      {badge ? ` [${badge}]` : ''}: {a.quantity}
+    </div>
+  );
+}
+
+/** Soft cap for the optional CIP-20 memo input (the background enforces the byte limit too). */
+const MEMO_MAX_CHARS = 256;
 
 export function formatAda(lovelace: string): string {
   const v = BigInt(lovelace);
@@ -28,6 +45,7 @@ const msg = (e: unknown) => (e instanceof Error ? e.message : 'Something went wr
 export function Send({ onBack }: { onBack: () => void }) {
   const [to, setTo] = useState('');
   const [amount, setAmount] = useState('');
+  const [memo, setMemo] = useState('');
   const [built, setBuilt] = useState<BuiltTx | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -45,7 +63,8 @@ export function Send({ onBack }: { onBack: () => void }) {
     setBusy(true);
     setError(null);
     try {
-      setBuilt(await wallet.buildSend(to.trim(), adaToLovelace(amount)));
+      const note = memo.trim();
+      setBuilt(await wallet.buildSend(to.trim(), adaToLovelace(amount), note.length > 0 ? note : undefined));
     } catch (e) {
       setError(msg(e));
     } finally {
@@ -90,12 +109,18 @@ export function Send({ onBack }: { onBack: () => void }) {
             <code style={codeBox}>{o.address}</code>
             <div style={{ fontSize: 18, fontWeight: 700 }}>{formatAda(o.value.lovelace)} ₳</div>
             {o.value.assets.map((a) => (
-              <div key={a.unit} style={assetLine}>
-                {a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`}: {a.quantity}
-              </div>
+              <AssetLine key={a.unit} a={a} />
             ))}
           </div>
         ))}
+        {built.summary.message && built.summary.message.lines.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, color: '#718096' }}>Message (public, on-chain)</div>
+            {built.summary.message.lines.map((line, i) => (
+              <code key={i} style={codeBox}>{line}</code>
+            ))}
+          </div>
+        )}
         <div style={rowLine}>
           <span>Network fee</span>
           <span>{formatAda(built.summary.fee)} ₳</span>
@@ -107,9 +132,7 @@ export function Send({ onBack }: { onBack: () => void }) {
               <span>{formatAda(o.value.lovelace)} ₳</span>
             </div>
             {o.value.assets.map((a) => (
-              <div key={a.unit} style={assetLine}>
-                {a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`}: {a.quantity}
-              </div>
+              <AssetLine key={a.unit} a={a} />
             ))}
           </div>
         ))}
@@ -141,6 +164,17 @@ export function Send({ onBack }: { onBack: () => void }) {
       </p>
       <label style={lbl}>Amount (₳)</label>
       <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.0" style={field} />
+      <label style={lbl}>Message (optional)</label>
+      <input
+        value={memo}
+        onChange={(e) => setMemo(e.target.value)}
+        maxLength={MEMO_MAX_CHARS}
+        placeholder="A note attached on-chain (CIP-20)"
+        style={field}
+      />
+      <p style={{ fontSize: 11, color: '#a0aec0', margin: '2px 0 6px' }}>
+        Public &amp; permanent — stored on-chain in the transaction, visible to everyone.
+      </p>
       {error && <p style={warn}>{error}</p>}
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button type="button" style={{ ...primaryButton, flex: 1 }} disabled={!validAddr || !validAmount || busy} onClick={() => void review()}>

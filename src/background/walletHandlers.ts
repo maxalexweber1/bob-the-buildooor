@@ -3,7 +3,7 @@
 // lives only in these function scopes and is discarded on return (CLAUDE.md §1.1).
 import type { WalletCommand, WalletStatus, WalletOverview, BuiltTx, SubmitResult, UtxoView } from '../shared/internal';
 import { vault } from './vault';
-import { chromeSessionStore } from './storage';
+import { chromeSessionStore, chromeLocalStore } from './storage';
 import { touchAutoLock, cancelAutoLock } from './autolock';
 import { mnemonicToRoot, deriveKey, Role } from '../core/keys';
 import { accountKeys, baseAddress, baseAddressFrom, bech32Network } from '../core/address';
@@ -11,13 +11,14 @@ import { aggregateBalance, valueView } from '../core/balance';
 import { buildSend } from '../core/tx/build';
 import { summarizeTx } from '../core/tx/summary';
 import { computeHistoryEntry, type HistoryEntry } from '../core/tx/history';
-import type { AddressTxRef } from './provider/IChainProvider';
+import type { AddressTxRef, AssetMetadata } from './provider/IChainProvider';
 import { signTxCbor } from './signer';
 import { toHex } from '../core/crypto/encoding';
 import { settings } from './settings';
 import { getProvider, clearProviderCache } from './walletProvider';
 import { discoverChain, nextReceiveIndex } from './discovery';
 import { getPendingApproval, respondApproval } from './dapp/approvals';
+import { fetchAssetImage } from './assetImage';
 import { allowlist } from './dapp/allowlist';
 
 async function status(): Promise<WalletStatus> {
@@ -141,6 +142,29 @@ async function listUtxos(): Promise<UtxoView[]> {
   return data;
 }
 
+// ---- Asset display metadata (CIP-25/68 token names) ----
+// Persisted in chrome.storage.local: NFT on-chain metadata is immutable, so a long TTL avoids
+// re-fetching on every dashboard render and across SW respawns. A `null` result is cached too, so an
+// asset with no metadata isn't re-queried each time.
+const ASSET_META_KEY = 'bob:assetMeta';
+const ASSET_META_TTL_MS = 24 * 60 * 60 * 1000; // 24h
+type AssetMetaCache = Record<string, { md: AssetMetadata | null; at: number }>;
+
+async function assetMetadata(unit: string): Promise<AssetMetadata | null> {
+  // unit = policyId(56 hex) + assetName(≤64 hex). Reject anything malformed before it reaches a URL.
+  if (!/^[0-9a-f]{56,120}$/i.test(unit)) return null;
+  const s = await settings.get();
+  const key = `${s.network}:${unit}`; // a unit can resolve differently per network — don't cross networks
+  const cache = (await chromeLocalStore.get<AssetMetaCache>(ASSET_META_KEY)) ?? {};
+  const hit = cache[key];
+  if (hit && Date.now() - hit.at < ASSET_META_TTL_MS) return hit.md;
+  const provider = await getProvider();
+  const md = provider.getAssetMetadata ? await provider.getAssetMetadata(unit) : null;
+  cache[key] = { md, at: Date.now() };
+  await chromeLocalStore.set(ASSET_META_KEY, cache);
+  return md;
+}
+
 // ---- Send flow (build → approve → submit) ----
 // The unsigned tx is held in session keyed by a random id; approval references the id so the user
 // can only sign the exact tx whose decoded summary they were shown (CLAUDE.md §1.5 integrity).
@@ -156,7 +180,7 @@ interface PendingTx {
   signers: SignerRef[]; // distinct input owners
 }
 
-async function buildSendTx(toAddress: string, lovelace: string): Promise<BuiltTx> {
+async function buildSendTx(toAddress: string, lovelace: string, memo?: string): Promise<BuiltTx> {
   const s = await settings.get();
   const provider = await getProvider();
   const mnemonic = await vault.getMnemonic();
@@ -192,6 +216,7 @@ async function buildSendTx(toAddress: string, lovelace: string): Promise<BuiltTx
       changeAddress,
     },
     { toAddress, lovelace: BigInt(lovelace) },
+    memo !== undefined ? { memo } : {},
   );
 
   // Which keys must sign? The distinct owners of the inputs buildooor actually selected.
@@ -279,7 +304,7 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
     }
 
     case 'buildSend':
-      return buildSendTx(command.toAddress, command.lovelace);
+      return buildSendTx(command.toAddress, command.lovelace, command.memo);
 
     case 'approveSend':
       return approveSendTx(command.id);
@@ -309,6 +334,15 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
       const provider = await getProvider();
       if (!provider.isConfirmed) return 'unknown';
       return (await provider.isConfirmed(command.txHash)) ? 'confirmed' : 'pending';
+    }
+
+    case 'getAssetMetadata':
+      return assetMetadata(command.unit);
+
+    case 'getAssetImage': {
+      // Privacy gate: when NFT images are off, never contact the gateway at all.
+      if ((await settings.get()).nftImages === false) return null;
+      return fetchAssetImage(command.uri);
     }
 
     default: {

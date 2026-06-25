@@ -98,6 +98,15 @@ export function Settings() {
         </Label>
       )}
 
+      <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 4px', cursor: 'pointer' }}>
+        <input type="checkbox" checked={s.nftImages !== false} onChange={(e) => patch({ nftImages: e.target.checked })} />
+        <span style={{ fontSize: 13, color: '#444' }}>Show NFT images</span>
+      </label>
+      <p style={{ ...hint, marginTop: 0 }}>
+        When on, the wallet fetches NFT art from a public IPFS gateway — that gateway can see your IP and
+        which NFTs you hold. Turn off for more privacy; token names still show.
+      </p>
+
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
         <button type="button" style={primary} disabled={busy} onClick={() => void save()}>
           Save

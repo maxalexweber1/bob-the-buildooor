@@ -1,6 +1,6 @@
 // Shared popup UI helpers + small presentational components. Privileged context. All external strings
 // render as React text nodes only (CLAUDE.md §1.8) — never dangerouslySetInnerHTML.
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import { wallet } from '../shared/walletClient';
 import type { Network } from '../background/provider/IChainProvider';
 
@@ -53,23 +53,46 @@ export function relativeTime(unixSeconds: number, nowMs: number = Date.now()): s
   return new Date(unixSeconds * 1000).toISOString().slice(0, 10);
 }
 
-/** Round avatar for a native asset — coloured by policy id, initial from the (decoded) name. */
-export function TokenAvatar({ policyId, label, size = 24 }: { policyId: string; label: string; size?: number }) {
+/**
+ * Round avatar for a native asset — the NFT art (a `data:` URI the SW produced, A2) when available,
+ * else a colour-from-policy-id circle with the name's initial. `image` is only ever a self-contained
+ * data: URI here, so it renders under the tight `img-src 'self' data:` CSP.
+ */
+export function TokenAvatar({
+  policyId,
+  label,
+  image,
+  size = 24,
+}: {
+  policyId: string;
+  label: string;
+  image?: string | undefined;
+  size?: number;
+}) {
+  const base: CSSProperties = {
+    width: size,
+    height: size,
+    minWidth: size,
+    borderRadius: '50%',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  };
+  if (image) {
+    return (
+      <img aria-hidden src={image} alt="" style={{ ...base, objectFit: 'cover' }} />
+    );
+  }
   return (
     <span
       aria-hidden
       style={{
-        width: size,
-        height: size,
-        minWidth: size,
-        borderRadius: '50%',
+        ...base,
         background: assetColor(policyId),
         color: '#fff',
         fontSize: size * 0.45,
         fontWeight: 700,
-        display: 'inline-flex',
-        alignItems: 'center',
-        justifyContent: 'center',
         textTransform: 'uppercase',
       }}
     >

@@ -4,6 +4,8 @@
 // Reusable for our own sends (M3) and, later, dApp-provided txs (M4) where inputs are provider-resolved.
 import type { Tx, UTxO } from '@harmoniclabs/buildooor';
 import { valueView, type TokenBundle, type AssetBalance } from '../balance';
+import { decodeTxMessage, CIP20_MESSAGE_LABEL, type TxMessage } from './txMessage';
+import { decodeCerts, decodeGovernance, type CertView, type GovernanceView } from './certs';
 
 export interface TxIO {
   address: string;
@@ -19,9 +21,12 @@ export interface WithdrawalView {
 
 /**
  * Presence flags for tx-body components we can't yet decode in detail (certs/governance need Conway
- * support buildooor doesn't expose; metadata is only a hash in the body; required-signers are bare
- * key hashes). The approval UI WARNS when any is set so they can't slip past the user, even though
- * mint/burn and withdrawals are now decoded explicitly (CLAUDE.md §1.5 — never blind-sign).
+ * support buildooor doesn't expose; required-signers are bare key hashes). The approval UI WARNS when
+ * any is set so they can't slip past the user, even though mint/burn, withdrawals and the CIP-20
+ * message are now decoded explicitly (CLAUDE.md §1.5 — never blind-sign).
+ *
+ * `metadata` here means "auxiliary data is present that we did NOT surface" — it is suppressed when
+ * the only metadata is the CIP-20 memo we decoded (see `message`), but still set for any other label.
  */
 export interface TxFlags {
   certificates: boolean;
@@ -40,6 +45,12 @@ export interface TxSummary {
   mint: AssetBalance[];
   /** Decoded reward withdrawals. Empty when none. */
   withdrawals: WithdrawalView[];
+  /** Decoded certificates (stake/governance, incl. Conway CIP-95). Empty when none. */
+  certificates: CertView[];
+  /** Decoded governance presence (votes flag + proposal count, CIP-1694). */
+  governance: GovernanceView;
+  /** Decoded CIP-20 message/memo (label 674), when the tx carries one. */
+  message?: TxMessage;
   flags: TxFlags;
 }
 
@@ -83,9 +94,19 @@ export function summarizeTx(tx: Tx, resolvedInputs: UTxO[], ownAddresses: Readon
   });
 
   const b = tx.body;
+  const metadataJson = tx.auxiliaryData?.metadata?.toJson();
+  const message = decodeTxMessage(metadataJson);
+  // Warn about auxiliary data only when something beyond the decoded CIP-20 memo is present: another
+  // metadata label, or non-metadata aux data (native/Plutus scripts → body has the hash but no
+  // metadata JSON). Over-warns rather than hide (CLAUDE.md §1.5).
+  const otherMetadataLabel =
+    metadataJson !== undefined &&
+    Object.keys(metadataJson).some((k) => k !== CIP20_MESSAGE_LABEL);
+  const undecodedAuxData = present(b.auxDataHash) && (otherMetadataLabel || message === undefined);
+
   const flags: TxFlags = {
     certificates: present(b.certs),
-    metadata: present(b.auxDataHash),
+    metadata: undecodedAuxData,
     governance: present(b.votingProcedures) || present(b.proposalProcedures),
     requiredSigners: present(b.requiredSigners),
   };
@@ -97,6 +118,9 @@ export function summarizeTx(tx: Tx, resolvedInputs: UTxO[], ownAddresses: Readon
     fee: b.fee.toString(),
     mint: decodeMint(b.mint),
     withdrawals: decodeWithdrawals(b.withdrawals),
+    certificates: decodeCerts(b.certs as ReadonlyArray<{ toJson(): unknown }> | undefined),
+    governance: decodeGovernance(b.votingProcedures, b.proposalProcedures as ArrayLike<unknown> | undefined),
+    ...(message ? { message } : {}),
     flags,
   };
 }

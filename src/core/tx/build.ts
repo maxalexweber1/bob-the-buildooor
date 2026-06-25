@@ -28,9 +28,22 @@ export interface SendOutput {
   assets?: Array<{ unit: string; quantity: bigint }>;
 }
 
+/** CIP-20 memos are short by design; cap the total to keep tx size (and fee) bounded (~4 lines). */
+export const MAX_MEMO_BYTES = 256;
+
+export interface BuildOptions {
+  /** Optional CIP-20 (label 674) message attached to the tx. buildooor splits it into ≤64-byte lines. */
+  memo?: string;
+}
+
 /** Build a single-output payment. Throws if funds are insufficient or the address is invalid. */
-export function buildSend(ctx: BuildContext, out: SendOutput): Tx {
+export function buildSend(ctx: BuildContext, out: SendOutput, opts: BuildOptions = {}): Tx {
   if (out.lovelace <= 0n) throw new Error('amount must be greater than zero');
+
+  const memo = opts.memo?.trim();
+  if (memo !== undefined && memo.length > 0 && new TextEncoder().encode(memo).length > MAX_MEMO_BYTES) {
+    throw new Error(`memo too long (max ${MAX_MEMO_BYTES} bytes)`);
+  }
 
   // Reject a recipient on the wrong network (e.g. a mainnet `addr1…` while the wallet is on testnet).
   // bech32 alone doesn't catch this; without the check the tx would build and the user could send to
@@ -57,5 +70,7 @@ export function buildSend(ctx: BuildContext, out: SendOutput): Tx {
     inputs: selected.map((utxo) => ({ utxo })),
     outputs: [{ address: recipient, value: outputValue }],
     changeAddress: ctx.changeAddress,
+    // buildooor wraps the string into CIP-20 label-674 `{msg:[…≤64B chunks]}` automatically.
+    ...(memo !== undefined && memo.length > 0 ? { memo } : {}),
   });
 }

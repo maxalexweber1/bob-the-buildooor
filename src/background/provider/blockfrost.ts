@@ -2,9 +2,9 @@
 // node-oriented and would bloat the SW). Field mappings mirror ODATANO's blockfrost-backend.ts.
 import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolParameters, type UTxO } from '@harmoniclabs/buildooor';
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
-import { type AddressTxRef, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
+import { type AddressTxRef, type AssetMetadata, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
 import { BLOCKFROST_BASE_URL, DEFAULT_TIMEOUT_MS, fetchJson, genesisInfosFor } from './network';
-import { costModelsFromArrays, mergeProtocolParameters, toUtxo, type AmountUnit } from './mappers';
+import { costModelsFromArrays, mergeProtocolParameters, toUtxo, pickString, pickNumber, joinImageUri, type AmountUnit } from './mappers';
 
 interface BfUtxo {
   tx_hash: string;
@@ -48,6 +48,14 @@ interface BfParams {
   protocol_minor_ver: number;
   cost_models_raw?: { PlutusV1?: number[]; PlutusV2?: number[]; PlutusV3?: number[] } | null;
 }
+interface BfAsset {
+  /** CIP-25/68 on-chain metadata — freeform; we pick known display keys defensively. */
+  onchain_metadata?: Record<string, unknown> | null;
+  onchain_metadata_standard?: string | null;
+  /** Off-chain CIP-26 token registry (mostly fungible tokens). */
+  metadata?: Record<string, unknown> | null;
+}
+
 
 export class BlockfrostProvider implements IChainProvider {
   readonly name = 'blockfrost';
@@ -162,6 +170,26 @@ export class BlockfrostProvider implements IChainProvider {
   /** Confirmed once /txs/{hash} exists (404 = not yet on-chain). */
   async isConfirmed(txHash: string): Promise<boolean> {
     return (await this.get<{ hash: string }>(`/txs/${txHash}`, true)) !== null;
+  }
+
+  /** Display metadata for an asset (CIP-25 on-chain, falling back to the off-chain registry). 404 → null. */
+  async getAssetMetadata(unit: string): Promise<AssetMetadata | null> {
+    const a = await this.get<BfAsset>(`/assets/${unit}`, true);
+    if (!a) return null;
+    const on = a.onchain_metadata ?? undefined;
+    const off = a.metadata ?? undefined;
+    const md: AssetMetadata = {};
+    const name = pickString(on?.name) ?? pickString(off?.name);
+    const description = pickString(on?.description) ?? pickString(off?.description);
+    const image = joinImageUri(on?.image) ?? joinImageUri(off?.logo);
+    const decimals = pickNumber(off?.decimals);
+    const standard = pickString(a.onchain_metadata_standard);
+    if (name !== undefined) md.name = name;
+    if (description !== undefined) md.description = description;
+    if (image !== undefined) md.image = image;
+    if (decimals !== undefined) md.decimals = decimals;
+    if (standard !== undefined) md.standard = standard;
+    return Object.keys(md).length > 0 ? md : null;
   }
 
   /** Recent transactions at an address, newest first (20/page). 404 (unused address) → []. */

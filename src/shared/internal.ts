@@ -5,12 +5,12 @@
 
 import type { WalletSettings } from '../background/settings';
 import type { WalletBalance } from '../core/balance';
-import type { Network, ChainTip } from '../background/provider/IChainProvider';
+import type { Network, ChainTip, AssetMetadata } from '../background/provider/IChainProvider';
 import type { TxSummary } from '../core/tx/summary';
 import type { HistoryEntry } from '../core/tx/history';
 import type { PendingApproval } from '../background/dapp/approvals';
 
-export type { ChainTip, TxSummary, HistoryEntry, PendingApproval };
+export type { ChainTip, TxSummary, HistoryEntry, PendingApproval, AssetMetadata };
 
 /** Result of building a send: an id binding the approval to the exact decoded summary shown. */
 export interface BuiltTx {
@@ -59,7 +59,7 @@ export type WalletCommand =
   | { type: 'getSettings' }
   | { type: 'updateSettings'; patch: Partial<WalletSettings> }
   | { type: 'pingProvider' }
-  | { type: 'buildSend'; toAddress: string; lovelace: string }
+  | { type: 'buildSend'; toAddress: string; lovelace: string; memo?: string }
   | { type: 'approveSend'; id: string }
   | { type: 'cancelSend' }
   | { type: 'getPendingApproval'; reqId: string }
@@ -68,7 +68,9 @@ export type WalletCommand =
   | { type: 'revokeDapp'; origin: string }
   | { type: 'getHistory' }
   | { type: 'listUtxos' }
-  | { type: 'getTxStatus'; txHash: string };
+  | { type: 'getTxStatus'; txHash: string }
+  | { type: 'getAssetMetadata'; unit: string }
+  | { type: 'getAssetImage'; uri: string };
 
 export interface InternalRequest {
   target: typeof INTERNAL_TARGET;

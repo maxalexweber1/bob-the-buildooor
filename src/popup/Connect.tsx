@@ -7,6 +7,7 @@ import { wallet } from '../shared/walletClient';
 import type { PendingApproval, TxSummary } from '../shared/internal';
 import { primaryButton } from './App';
 import { formatAda } from './Send';
+import { cip67LabelName } from '../core/cip67';
 
 export function Connect() {
   const [pending, setPending] = useState<PendingApproval | null | undefined>(undefined);
@@ -80,6 +81,9 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
       ))}
       <MintRows mint={summary.mint} />
       <WithdrawalRows withdrawals={summary.withdrawals} />
+      <CertRows certs={summary.certificates} />
+      <GovernanceRows governance={summary.governance} />
+      <MessageRows message={summary.message} />
       <div style={row}><span>Network fee</span><span>{formatAda(summary.fee)} ₳</span></div>
       {change.map((o, i) => (
         <div key={i} style={{ marginTop: 4 }}>
@@ -99,11 +103,15 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
 function AssetRows({ assets }: { assets: TxSummary['outputs'][number]['value']['assets'] }) {
   return (
     <>
-      {assets.map((a) => (
-        <div key={a.unit} style={asset}>
-          {(a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`)}: {a.quantity}
-        </div>
-      ))}
+      {assets.map((a) => {
+        const badge = a.cip67Label === undefined ? undefined : cip67LabelName(a.cip67Label);
+        return (
+          <div key={a.unit} style={asset}>
+            {(a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`)}
+            {badge ? ` [${badge}]` : ''}: {a.quantity}
+          </div>
+        );
+      })}
     </>
   );
 }
@@ -143,11 +151,60 @@ function WithdrawalRows({ withdrawals }: { withdrawals: TxSummary['withdrawals']
   );
 }
 
+/** Decoded certificates (stake + Conway/CIP-95 governance) — so a gov tx is never blind-signed. */
+function CertRows({ certs }: { certs: TxSummary['certificates'] }) {
+  if (certs.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={lbl}>Certificates</div>
+      {certs.map((c, i) => (
+        <div key={i} style={asset}>
+          {c.description}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Governance presence: voting procedures (flag) + proposal count (CIP-1694). */
+function GovernanceRows({ governance }: { governance: TxSummary['governance'] }) {
+  if (!governance.hasVotes && governance.proposals === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={lbl}>Governance</div>
+      {governance.hasVotes && <div style={asset}>Casts governance vote(s)</div>}
+      {governance.proposals > 0 && <div style={asset}>Submits {governance.proposals} governance proposal(s)</div>}
+    </div>
+  );
+}
+
+/**
+ * Decoded CIP-20 message/memo (label 674). Rendered as React text nodes only — never
+ * dangerouslySetInnerHTML — since the content is attacker-controlled (CLAUDE.md §8). CIP-83 encrypted
+ * bodies are labelled, not shown as if they were readable plaintext.
+ */
+function MessageRows({ message }: { message: TxSummary['message'] }) {
+  if (!message) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={lbl}>Message{message.encrypted ? ' (encrypted — not decoded)' : ''}</div>
+      {message.encrypted && message.lines.length === 0 ? (
+        <div style={asset}>🔒 This message is encrypted; its contents cannot be shown.</div>
+      ) : (
+        message.lines.map((line, i) => (
+          <div key={i} style={smallBox}>
+            {message.encrypted ? '🔒 ' : ''}
+            {line}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
 /** Surfaces tx components this build doesn't fully decode yet — so the user is never blind to them. */
 function TxFlagsWarning({ flags }: { flags: TxSummary['flags'] }) {
   const present = [
-    flags.certificates && 'certificate(s)',
-    flags.governance && 'governance action(s)',
     flags.metadata && 'metadata',
     flags.requiredSigners && 'extra required signer(s)',
   ].filter(Boolean);
