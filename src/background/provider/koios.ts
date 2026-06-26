@@ -235,5 +235,18 @@ export class KoiosProvider implements IChainProvider {
     return Object.keys(md).length > 0 ? md : null;
   }
 
+  /** Addresses holding an asset (NFT holder lookup for ADA Handle resolution, T8.1). */
+  async getAssetAddresses(unit: string): Promise<{ address: string; quantity: string }[]> {
+    if (!/^[0-9a-f]{56,120}$/i.test(unit)) return [];
+    const policyId = unit.slice(0, 56);
+    const assetNameHex = unit.slice(56);
+    const rows =
+      (await this.post<Array<{ payment_address: string; quantity: string }>>('/asset_addresses', {
+        _asset_policy: policyId,
+        _asset_name: assetNameHex,
+      })) ?? [];
+    return rows.map((r) => ({ address: r.payment_address, quantity: r.quantity }));
+  }
+
   // No evaluateTx — Koios has no ledger-state script eval; use Ogmios for Plutus ex-units (M5).
 }

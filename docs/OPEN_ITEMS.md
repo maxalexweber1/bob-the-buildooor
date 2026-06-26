@@ -11,9 +11,10 @@ dropped once its upstream fix is released in a version we depend on.
 
 | # | Item | Upstream link | Status | Notes |
 |---|------|---------------|--------|-------|
-| 1 | `AuxiliaryData` `TxMetadata` import → `eras/common` (dual-class `instanceof`) | [commit `b68105f`](https://github.com/HarmonicLabs/cardano-ledger-ts/commit/b68105f) | **submitted** | Metadata/memo build threw on every tx. See [PR-tx-metadata-import-fix.md](./PR-tx-metadata-import-fix.md). |
-| 2 | `AuxiliaryData` Conway aux_data fields optional (metadata-only parses) | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) (`bc95c39`) | submitted | `Tx.fromCbor` rejected metadata-only (CIP-20 / label 674) txs. Guarded by `test/auxDataPatch.test.ts`. |
-| 3 | `TxBody` `Certificate` import → `eras/common` (dual-class) | [commit `b68105f`](https://github.com/HarmonicLabs/cardano-ledger-ts/commit/b68105f) | submitted | Conway certs/voting (T6.2). Same dual-class root cause as #1. |
+| 1 | `AuxiliaryData` `TxMetadata` import → `eras/common` (dual-class `instanceof`) | [PR #20](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/20) (`ab312d8`/`4a563f0`) | **merged** 2026-06-26 — awaiting npm publish | Metadata/memo build threw on every tx. See [PR-tx-metadata-import-fix.md](./PR-tx-metadata-import-fix.md). |
+| 2 | `AuxiliaryData` Conway aux_data fields optional (metadata-only parses) | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) (`8c766d7`/`bc95c39`) | **merged** 2026-06-26 — awaiting npm publish | `Tx.fromCbor` rejected metadata-only (CIP-20 / label 674) txs. Guarded by `test/auxDataPatch.test.ts`. |
+| 3 | `TxBody` `Certificate` import → `eras/common` (dual-class) | [PR #20](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/20) (`ab312d8`) | **merged** 2026-06-26 — awaiting npm publish | Conway certs/voting (T6.2). Same dual-class root cause as #1. |
+| 5 | `AuxiliaryData.fromCborObj` off-by-one (`Array(4)`/`i<4`) drops Plutus-v3 aux scripts; `toJson()` maps v2 under the v3 key | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) | **merged** 2026-06-26 — awaiting npm publish | Backported into our patch 2026-06-26 alongside #2 (same PR). v3 aux scripts silently lost on decode; `toJson` mislabel. |
 | 4 | buildooor `keepRelevant` over-selects (every UTxO → no ADA-only collateral) | [PR #12](https://github.com/HarmonicLabs/buildooor/pull/12) | submitted | Worked around by our own `src/core/tx/coinSelect.ts` (T3.1). |
 
 ### About `patches/@harmoniclabs+cardano-ledger-ts+0.5.1.patch`
@@ -26,9 +27,11 @@ its *installed* files via [`patch-package`](https://github.com/ds300/patch-packa
   next `npm install`; the checked-in `.patch` file is what makes the fix reproducible for CI and every dev.
 - **Filename = target + version.** `@harmoniclabs+cardano-ledger-ts` + `+0.5.1` → the patch only applies to
   exactly that version (a guard against silently mis-applying to a different release).
-- **Contents.** Three fork-sourced fixes, all minimal: (1) `AuxiliaryData` `TxMetadata` `require()` repoint,
+- **Contents.** Five fork-sourced fixes, all minimal: (1) `AuxiliaryData` `TxMetadata` `require()` repoint,
   (2) `AuxiliaryData.fromCborObj` metadata-only precondition relax, (3) `TxBody` `Certificate` `require()`
-  repoint. See the table above for the matching upstream refs.
+  repoint, (5a) `fromCborObj` field-array off-by-one `Array(4)/i<4` → `Array(5)/i<5` (read the Plutus-v3
+  field), (5b) `toJson()` `plutusV3Scripts` mapping `this.plutusV3Scripts` (was `plutusV2Scripts`). (5a/5b
+  are the rest of upstream PR #19, backported 2026-06-26.) See the table above for the matching upstream refs.
 - **How it's applied.** `patch-package` is invoked inline at the start of the `dev` / `build` / `test`
   scripts (idempotent, ~1 s). It is **not** wired as a `postinstall` hook because `.npmrc ignore-scripts=true`
   (supply-chain hardening, T7.1) blocks lifecycle hooks — so after a fresh `npm ci`, run `npm run patch`
@@ -38,8 +41,9 @@ its *installed* files via [`patch-package`](https://github.com/ds300/patch-packa
 
 ## Follow-ups (unwind once upstream lands)
 
-- [ ] When items 1–3 are merged + released, bump `@harmoniclabs/cardano-ledger-ts` and remove the
-      corresponding hunks from `patches/…+0.5.1.patch` (drop the patch entirely if all three are gone).
+- [ ] Items 1–3 + 5 are **merged on `main`** (PR #19 + PR #20, 2026-06-26) but **not yet published to npm**
+      (latest is still 0.5.1; no 0.5.2 tag/release). When the fixes ship in a published version, bump
+      `@harmoniclabs/cardano-ledger-ts` and **delete the patch file entirely** (all four hunks are then upstream).
 - [ ] When buildooor #4 lands, revert to its `keepRelevant` and delete `src/core/tx/coinSelect.ts` (T3.1).
 - [ ] `patch-package` runs inline in `dev`/`build`/`test` (not via `postinstall`) because
       `ignore-scripts=true` (T7.1). Revisit if the supply-chain policy changes.
@@ -73,6 +77,17 @@ go/no-go before any work starts.
       (multisig connector — *disables* `signTx`/`signData`, replaces them with `submitUnsignedTx` /
       `getCompletedTx`). Architectural, not a flag: separate derivation, script-address handling, and a
       different connector contract. Out of scope for single-sig v1 (IMPLEMENTATION_PLAN §… CIP table).
+- [x] **ADA Handle resolution (`$handle` → address).** ✅ Shipped (T8.1). Send recipient field accepts an
+      ADA Handle and resolves to the current on-chain NFT holder via `IChainProvider.getAssetAddresses`
+      (Blockfrost/Koios) — `core/handle.ts` + `core/cip67.ts` `encodeCip67`. Policy-as-identity guard,
+      single-holder check, CIP-25 + CIP-68 (222) name forms, WYSIWYG resolved-address shown for approval.
+      Policy id `f0ff48bbb7bbe9d59a40f1ce90e9e9d0ff5002ec48f232b49ca0fb9a` is network-independent.
+      dApp path also shipped: `api.experimental.resolveHandle(handle)` (origin-gated, read-only, returns
+      CIP-30 hex address bytes). **Verified live on preprod** via `test/handle.integration.test.ts`
+      (gated by `RUN_INTEGRATION=1`, keyless Koios): resolves a real root handle to its single holder
+      (cross-checked against `asset_addresses`) and rejects no-holder/never-minted handles. **Follow-up
+      (deferred):** an optional external `cf-adahandle-resolver` URL backend (trust boundary — document
+      in SECURITY.md).
 - [ ] **CIP-104 — account public-key extension.** Proposed; nice-to-have.
 - [ ] **More chain backends.** Blockfrost, Koios and Ogmios are wired behind `IChainProvider` today.
       Still open: a Kupo chain-index pairing for Ogmios (UTxO-by-address history) and a future

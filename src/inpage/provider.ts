@@ -79,7 +79,13 @@ function fullApi(enabledCips: number[]) {
     signData: (addr: string, payload: string) =>
       request<{ signature: string; key: string }>('signData', addr, payload),
     submitTx: (tx: string) => request<string>('submitTx', tx),
-    experimental: {},
+    experimental: {
+      // Non-standard: resolve an ADA Handle (e.g. "$alice", with or without the leading $) to the
+      // address currently holding it. Returns the address as CIP-30 hex bytes (feed straight into tx
+      // building, or `Address.fromBytes` for bech32). Rejects with an APIError on an invalid/unminted/
+      // ambiguous handle. Origin must be enabled; no signing/consent (read-only chain lookup).
+      resolveHandle: (handle: string) => request<string>('resolveHandle', handle),
+    },
     ...extensionApi(enabledCips),
   };
 }

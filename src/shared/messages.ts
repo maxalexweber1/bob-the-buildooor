@@ -22,6 +22,9 @@ export type RpcMethod =
   | 'signTx'
   | 'signData'
   | 'submitTx'
+  // Non-standard convenience exposed under `api.experimental` (no CIP number): resolve an ADA $handle
+  // to the current holder's address. Read-only, origin-gated, no unlock/consent (T8.1).
+  | 'resolveHandle'
   // CIP-30 extension methods are routed generically as `cip{N}.{method}` (e.g. cip95.getPubDRepKey).
   // The set of real methods lives in shared/extensions.ts (EXTENSION_REGISTRY); the background rejects
   // any cipNN.* method that isn't implemented or whose extension the origin didn't negotiate.

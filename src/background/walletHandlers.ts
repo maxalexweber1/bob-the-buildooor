@@ -20,6 +20,7 @@ import { discoverChain, nextReceiveIndex } from './discovery';
 import { getPendingApproval, respondApproval } from './dapp/approvals';
 import { fetchAssetImage } from './assetImage';
 import { allowlist } from './dapp/allowlist';
+import { resolveHandle, type ResolvedHandle } from '../core/handle';
 
 async function status(): Promise<WalletStatus> {
   return { initialized: await vault.isInitialized(), unlocked: await vault.isUnlocked() };
@@ -234,6 +235,19 @@ async function buildSendTx(toAddress: string, lovelace: string, memo?: string): 
   return { id: pending.id, summary };
 }
 
+// ---- ADA Handle resolution (T8.1) ----
+// Read-only: maps `$handle` → current holder address via the provider's asset-holder index. No secret
+// access. The popup shows the resolved address for the user to verify before it ever reaches buildSend.
+async function resolveHandleCmd(input: string): Promise<ResolvedHandle> {
+  const provider = await getProvider();
+  // Bind so `this` survives and TS narrows away the optional — no non-null `!` (CLAUDE.md §2).
+  const getAssetAddresses = provider.getAssetAddresses?.bind(provider);
+  if (!getAssetAddresses) {
+    throw new Error(`${provider.name} can't resolve ADA Handles — switch to Blockfrost or Koios in Settings`);
+  }
+  return resolveHandle(input, { getAssetAddresses });
+}
+
 async function approveSendTx(id: string): Promise<SubmitResult> {
   const pending = await chromeSessionStore.get<PendingTx>(PENDING_KEY);
   if (!pending || pending.id !== id) throw new Error('no matching pending transaction');
@@ -344,6 +358,9 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
       if ((await settings.get()).nftImages === false) return null;
       return fetchAssetImage(command.uri);
     }
+
+    case 'resolveHandle':
+      return resolveHandleCmd(command.handle);
 
     default: {
       // Exhaustiveness guard — a new command type without a handler is a compile error.

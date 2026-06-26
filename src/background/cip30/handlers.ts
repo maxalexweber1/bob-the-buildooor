@@ -11,6 +11,7 @@ import {
   apiError,
   refused,
   internalError,
+  invalidRequest,
   txSendFailure,
   APIErrorCode,
   TxSignErrorCode,
@@ -40,6 +41,7 @@ import { signTxWitnessSet } from '../signer';
 import type { IChainProvider } from '../provider/index';
 import { discoverChain, nextReceiveIndex } from '../discovery';
 import { toHex, fromHex } from '../../core/crypto/encoding';
+import { resolveHandle, HandleError } from '../../core/handle';
 
 interface OwnerRef {
   role: number;
@@ -112,6 +114,12 @@ async function authedMethod(method: string, params: unknown[], origin: string): 
   if (extCip !== null && !(await allowlist.getExtensions(origin)).includes(extCip)) {
     throw apiError(APIErrorCode.InvalidRequest, `cip-${extCip} extension not enabled for this origin`);
   }
+
+  // experimental.resolveHandle: read-only ADA Handle → address lookup (T8.1). No wallet keys involved,
+  // so it needs no unlock — but it IS origin-gated (above) so a random page can't use the wallet as a
+  // free resolution/fingerprinting proxy. The dApp builds its own tx; the user still approves the real
+  // output address at signTx time (decode-before-sign), so resolution here grants no signing authority.
+  if (method === 'resolveHandle') return resolveHandleForDapp(params[0]);
 
   // The rest need keys (unlocked) + chain data.
   if (!(await vault.isUnlocked())) throw internalError('wallet is locked');
@@ -276,6 +284,27 @@ async function signData(
     signingKey.toPrivateKeyBytes(),
     signingKey.public().toPubKeyBytes(),
   );
+}
+
+/**
+ * Resolve an ADA $handle to the current holder's address, returned as CIP-30 hex bytes (consistent
+ * with getChangeAddress/getUsedAddresses). The handle string is untrusted page input → `resolveHandle`
+ * validates it before any lookup. Errors are mapped to CIP-30 `{code,info}`: a bad/unminted/ambiguous
+ * handle is an InvalidRequest (-1); a provider without an asset index is an InternalError (-2).
+ */
+async function resolveHandleForDapp(handleParam: unknown): Promise<string> {
+  if (typeof handleParam !== 'string') throw invalidRequest('resolveHandle: handle must be a string');
+  const provider = await getProvider();
+  const getAssetAddresses = provider.getAssetAddresses?.bind(provider);
+  if (!getAssetAddresses) throw internalError(`${provider.name} cannot resolve handles (no asset index)`);
+  try {
+    const { address } = await resolveHandle(handleParam, { getAssetAddresses });
+    return toHex(Address.fromString(address).toBuffer());
+  } catch (e) {
+    if (e instanceof HandleError) throw invalidRequest(e.message);
+    if (e instanceof Cip30Error) throw e;
+    throw internalError(e instanceof Error ? e.message : 'resolveHandle failed');
+  }
 }
 
 /** CIP-30 amount: a cbor<value> hex, or (loosely) a decimal lovelace string. Null if absent/unparseable. */

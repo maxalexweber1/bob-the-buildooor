@@ -94,6 +94,12 @@ export interface IChainProvider {
    * to show NFT/token names beyond the on-chain asset name. Kupo/Ogmios have no metadata index → omit.
    */
   getAssetMetadata?(unit: string): Promise<AssetMetadata | null>;
+  /**
+   * Addresses currently holding asset `unit` (policyId+assetNameHex), with quantities. Resolves ADA
+   * Handles to their current holder (T8.1, `core/handle.ts`). Needs an asset-holder index → Blockfrost
+   * and Koios provide it; Ogmios (no asset index) omits it and the caller reports it unsupported.
+   */
+  getAssetAddresses?(unit: string): Promise<{ address: string; quantity: string }[]>;
 
   // ---- transaction history (needs historic state: Blockfrost/Koios; Ogmios omits → unsupported) ----
   /** Transactions touching an address, newest first; `page` is 1-based. */

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseCip67, cip67LabelName } from '../src/core/cip67';
+import { parseCip67, encodeCip67, cip67LabelName } from '../src/core/cip67';
 
 const hex = (s: string) => Buffer.from(s, 'utf8').toString('hex');
 
@@ -37,6 +37,35 @@ describe('parseCip67 (standards review)', () => {
     expect(parseCip67('')).toBeUndefined();
     expect(parseCip67('00de')).toBeUndefined(); // too short
     expect(parseCip67('zzzzzzzz')).toBeUndefined(); // not hex
+  });
+});
+
+describe('encodeCip67 (inverse of parseCip67)', () => {
+  it('reproduces the spec example prefix for label 222', () => {
+    expect(encodeCip67(222, hex('Test'))).toBe(PFX.nft + hex('Test'));
+  });
+
+  it('reproduces every standard CIP-68 label prefix', () => {
+    expect(encodeCip67(100)).toBe(PFX.ref);
+    expect(encodeCip67(222)).toBe(PFX.nft);
+    expect(encodeCip67(333)).toBe(PFX.ft);
+    expect(encodeCip67(444)).toBe(PFX.rft);
+  });
+
+  it('round-trips through parseCip67 for assorted labels/content', () => {
+    for (const label of [100, 222, 333, 444, 1, 0xffff]) {
+      for (const content of ['', hex('a'), hex('boris'), 'deadbeef']) {
+        const parsed = parseCip67(encodeCip67(label, content));
+        expect(parsed).toEqual({ label, contentHex: content.toLowerCase() });
+      }
+    }
+  });
+
+  it('rejects an out-of-range label or odd-length content', () => {
+    expect(() => encodeCip67(0x10000)).toThrow();
+    expect(() => encodeCip67(-1)).toThrow();
+    expect(() => encodeCip67(222, 'abc')).toThrow();
+    expect(() => encodeCip67(222, 'zz')).toThrow();
   });
 });
 

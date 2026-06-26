@@ -3,9 +3,10 @@
 // approve an opaque blob). Approval references the built tx's id, so the signed tx == the one shown.
 import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
-import type { BuiltTx, TxStatus } from '../shared/internal';
+import type { BuiltTx, TxStatus, ResolvedHandle } from '../shared/internal';
 import type { AssetBalance } from '../core/balance';
 import { cip67LabelName } from '../core/cip67';
+import { looksLikeHandle } from '../core/handle';
 import { primaryButton } from './App';
 
 /** One native-asset line in the review: stripped/decoded name + CIP-67 class badge + quantity. */
@@ -50,21 +51,65 @@ export function Send({ onBack }: { onBack: () => void }) {
   const [txHash, setTxHash] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // ADA Handle resolution (T8.1): when the recipient is a `$handle`, resolve it to the current holder
+  // and show that address for the user to verify. We send to the concrete resolved address the user saw
+  // (WYSIWYG) — never the raw handle — so there's no gap between what's approved and where funds go.
+  const [resolved, setResolved] = useState<ResolvedHandle | null>(null);
+  const [resolving, setResolving] = useState(false);
+  const [resolveErr, setResolveErr] = useState<string | null>(null);
 
-  const validAddr = /^addr(_test)?1[0-9a-z]{20,}$/.test(to.trim());
+  const trimmed = to.trim();
+  const isHandle = looksLikeHandle(trimmed);
+  const validAddr = !isHandle && /^addr(_test)?1[0-9a-z]{20,}$/.test(trimmed);
+  // The address funds will actually go to: the resolved holder for a handle, else the literal address.
+  const recipient = isHandle ? resolved?.address : validAddr ? trimmed : undefined;
   let validAmount = false;
   try {
     validAmount = BigInt(adaToLovelace(amount)) > 0n;
   } catch {
     validAmount = false;
   }
+  const canReview = recipient !== undefined && validAmount && !busy && !resolving;
+
+  // Debounced resolve: re-run whenever the handle text settles. No persistent cache — each settled edit
+  // hits the provider fresh (handles are transferable NFTs; a stale holder could misdirect funds).
+  useEffect(() => {
+    if (!isHandle) {
+      setResolved(null);
+      setResolveErr(null);
+      setResolving(false);
+      return;
+    }
+    setResolved(null);
+    setResolveErr(null);
+    setResolving(true);
+    let active = true;
+    const timer = setTimeout(() => {
+      void wallet
+        .resolveHandle(trimmed)
+        .then((r) => {
+          if (active) setResolved(r);
+        })
+        .catch((e) => {
+          if (active) setResolveErr(msg(e));
+        })
+        .finally(() => {
+          if (active) setResolving(false);
+        });
+    }, 400);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [trimmed, isHandle]);
 
   async function review() {
+    if (!recipient) return;
     setBusy(true);
     setError(null);
     try {
       const note = memo.trim();
-      setBuilt(await wallet.buildSend(to.trim(), adaToLovelace(amount), note.length > 0 ? note : undefined));
+      setBuilt(await wallet.buildSend(recipient, adaToLovelace(amount), note.length > 0 ? note : undefined));
     } catch (e) {
       setError(msg(e));
     } finally {
@@ -156,12 +201,24 @@ export function Send({ onBack }: { onBack: () => void }) {
   return (
     <div>
       <h2 style={h2}>Send</h2>
-      <label style={lbl}>Recipient address</label>
+      <label style={lbl}>Recipient address or $handle</label>
       <textarea value={to} onChange={(e) => setTo(e.target.value)} rows={3} spellCheck={false} style={{ ...field, fontFamily: 'monospace', resize: 'vertical' }} />
       <p style={{ fontSize: 11, color: '#a0aec0', margin: '2px 0 6px' }}>
-        Double-check the address — clipboard malware can swap a pasted address. You'll confirm the full
-        address on the next screen.
+        Enter an address, or an ADA Handle like <code>$alice</code>. Double-check it — clipboard malware
+        can swap a pasted address. You'll confirm the full address on the next screen.
       </p>
+      {isHandle && (
+        <div style={{ margin: '2px 0 6px' }}>
+          {resolving && <p style={{ fontSize: 11, color: '#a0aec0', margin: 0 }}>Resolving handle…</p>}
+          {resolved && !resolving && (
+            <div>
+              <div style={{ fontSize: 11, color: '#2f855a' }}>${resolved.handle} → current holder ✓</div>
+              <code style={codeBox}>{resolved.address}</code>
+            </div>
+          )}
+          {resolveErr && !resolving && <p style={warn}>{resolveErr}</p>}
+        </div>
+      )}
       <label style={lbl}>Amount (₳)</label>
       <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0.0" style={field} />
       <label style={lbl}>Message (optional)</label>
@@ -177,7 +234,7 @@ export function Send({ onBack }: { onBack: () => void }) {
       </p>
       {error && <p style={warn}>{error}</p>}
       <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
-        <button type="button" style={{ ...primaryButton, flex: 1 }} disabled={!validAddr || !validAmount || busy} onClick={() => void review()}>
+        <button type="button" style={{ ...primaryButton, flex: 1 }} disabled={!canReview} onClick={() => void review()}>
           {busy ? 'Building…' : 'Review'}
         </button>
         <button type="button" style={{ ...primaryButton, flex: 1, background: '#a0aec0' }} onClick={onBack}>

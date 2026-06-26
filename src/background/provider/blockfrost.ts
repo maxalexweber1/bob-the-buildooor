@@ -192,6 +192,16 @@ export class BlockfrostProvider implements IChainProvider {
     return Object.keys(md).length > 0 ? md : null;
   }
 
+  /** Addresses holding an asset (NFT holder lookup for ADA Handle resolution, T8.1). 404 → []. */
+  async getAssetAddresses(unit: string): Promise<{ address: string; quantity: string }[]> {
+    if (!/^[0-9a-f]{56,120}$/i.test(unit)) return [];
+    const rows = await this.get<Array<{ address: string; quantity: string }>>(
+      `/assets/${unit}/addresses?count=100&page=1`,
+      true,
+    );
+    return rows ?? [];
+  }
+
   /** Recent transactions at an address, newest first (20/page). 404 (unused address) → []. */
   async getAddressTransactions(address: string, page = 1): Promise<AddressTxRef[]> {
     const rows = await this.get<Array<{ tx_hash: string; block_height: number; block_time: number }>>(

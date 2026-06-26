@@ -15,6 +15,7 @@ import {
   type UtxoView,
   type TxStatus,
   type AssetMetadata,
+  type ResolvedHandle,
 } from './internal';
 
 async function send<T>(command: WalletCommand): Promise<T> {
@@ -55,4 +56,5 @@ export const wallet = {
   getTxStatus: (txHash: string) => send<TxStatus>({ type: 'getTxStatus', txHash }),
   getAssetMetadata: (unit: string) => send<AssetMetadata | null>({ type: 'getAssetMetadata', unit }),
   getAssetImage: (uri: string) => send<string | null>({ type: 'getAssetImage', uri }),
+  resolveHandle: (handle: string) => send<ResolvedHandle>({ type: 'resolveHandle', handle }),
 };

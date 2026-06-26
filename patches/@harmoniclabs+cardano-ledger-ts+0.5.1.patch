@@ -1,5 +1,5 @@
 diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js
-index 20f52d6..2ef9ca9 100644
+index 20f52d6..bd50ea6 100644
 --- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js
 +++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/AuxiliaryData/AuxiliaryData.js
 @@ -23,7 +23,11 @@ var obj_utils_1 = require("@harmoniclabs/obj-utils");
@@ -15,7 +15,25 @@ index 20f52d6..2ef9ca9 100644
  var InvalidCborFormatError_1 = require("../../utils/InvalidCborFormatError.js");
  var getSubCborRef_1 = require("../../utils/getSubCborRef.js");
  function scriptArrToCbor(scripts) {
-@@ -196,10 +200,12 @@ var AuxiliaryData = /** @class */ (function () {
+@@ -182,7 +186,11 @@ var AuxiliaryData = /** @class */ (function () {
+         if (!(cObj instanceof cbor_1.CborTag &&
+             cObj.data instanceof cbor_1.CborMap))
+             throw new InvalidCborFormatError_1.InvalidCborFormatError("AuxiliaryData");
+-        var fields = new Array(4).fill(undefined);
++        // PATCH (cardano-ledger-ts-fork PR #19): 5 Conway aux_data fields
++        // (0 metadata, 1 native, 2 plutusV1, 3 plutusV2, 4 plutusV3). Upstream 0.5.1
++        // allocated/looped only 4, so field 4 (plutusV3 scripts) was never read and the
++        // __read(fields, 5) below always left _pV3 undefined — v3 aux scripts silently dropped.
++        var fields = new Array(5).fill(undefined);
+         var _loop_1 = function (i) {
+             var v = ((_a = cObj.data.map.find(function (_a) {
+                 var k = _a.k;
+@@ -192,14 +200,16 @@ var AuxiliaryData = /** @class */ (function () {
+                 return "continue";
+             fields[i] = v;
+         };
+-        for (var i = 0; i < 4; i++) {
++        for (var i = 0; i < 5; i++) {
              _loop_1(i);
          }
          var _b = __read(fields, 5), _metadata = _b[0], _native = _b[1], _pV1 = _b[2], _pV2 = _b[3], _pV3 = _b[4];
@@ -32,6 +50,17 @@ index 20f52d6..2ef9ca9 100644
              throw new InvalidCborFormatError_1.InvalidCborFormatError("AuxiliaryData");
          return new AuxiliaryData({
              metadata: _metadata === undefined ? undefined : TxMetadata_1.TxMetadata.fromCborObj(_metadata),
+@@ -229,7 +239,9 @@ var AuxiliaryData = /** @class */ (function () {
+             nativeScripts: (_b = this.nativeScripts) === null || _b === void 0 ? void 0 : _b.map(function (s) { return s.toJson(); }),
+             plutusV1Scripts: (_c = this.plutusV1Scripts) === null || _c === void 0 ? void 0 : _c.map(function (s) { return s.toJson(); }),
+             plutusV2Scripts: (_d = this.plutusV2Scripts) === null || _d === void 0 ? void 0 : _d.map(function (s) { return s.toJson(); }),
+-            plutusV3Scripts: (_e = this.plutusV2Scripts) === null || _e === void 0 ? void 0 : _e.map(function (s) { return s.toJson(); })
++            // PATCH (cardano-ledger-ts-fork PR #19): upstream 0.5.1 mapped this.plutusV2Scripts
++            // under the plutusV3Scripts key (copy-paste bug) — toJson() reported v2 scripts as v3.
++            plutusV3Scripts: (_e = this.plutusV3Scripts) === null || _e === void 0 ? void 0 : _e.map(function (s) { return s.toJson(); })
+         };
+     };
+     return AuxiliaryData;
 diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
 index 05bf826..9d1ceaf 100644
 --- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js

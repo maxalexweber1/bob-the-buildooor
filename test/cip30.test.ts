@@ -18,6 +18,7 @@ const h = vi.hoisted(() => {
     resolveUtxos: vi.fn(async () => []),
     getProtocolParameters: vi.fn(async () => ({})),
     getGenesisInfos: vi.fn(async () => ({})),
+    getAssetAddresses: vi.fn(async () => [] as Array<{ address: string; quantity: string }>),
   };
   return { state, provider };
 });
@@ -77,6 +78,8 @@ beforeEach(() => {
   h.state.network = 'preview';
   h.provider.getUtxos.mockClear();
   h.provider.submitTx.mockClear();
+  h.provider.getAssetAddresses.mockClear();
+  h.provider.getAssetAddresses.mockResolvedValue([]);
 });
 
 describe('handleCip30 — enable & gating (T4.1)', () => {
@@ -206,5 +209,44 @@ describe('handleCip30 — read methods (T4.2)', () => {
     const unreg = (await handleCip30('cip95.getUnregisteredPubStakeKeys', [], ORIGIN)) as string[];
     expect(unreg).toHaveLength(1);
     expect(unreg[0]).toMatch(/^[0-9a-f]{64}$/);
+  });
+});
+
+describe('handleCip30 — experimental.resolveHandle (T8.1, dApp path)', () => {
+  const HOLDER_HEX = toHex(Address.fromString(RECIPIENT).toBuffer());
+
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+  });
+
+  it('resolves a $handle to the holder address as CIP-30 hex bytes', async () => {
+    h.provider.getAssetAddresses.mockResolvedValue([{ address: RECIPIENT, quantity: '1' }]);
+    const hex = await handleCip30('resolveHandle', ['$alice'], ORIGIN);
+    expect(hex).toBe(HOLDER_HEX);
+  });
+
+  it('needs no unlock (read-only chain lookup)', async () => {
+    h.state.unlocked = false;
+    h.provider.getAssetAddresses.mockResolvedValue([{ address: RECIPIENT, quantity: '1' }]);
+    expect(await handleCip30('resolveHandle', ['alice'], ORIGIN)).toBe(HOLDER_HEX);
+  });
+
+  it('rejects an invalid handle (InvalidRequest -1) without hitting the provider', async () => {
+    await expect(handleCip30('resolveHandle', ['$bad space'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    expect(h.provider.getAssetAddresses).not.toHaveBeenCalled();
+  });
+
+  it('rejects a non-string handle argument (InvalidRequest -1)', async () => {
+    await expect(handleCip30('resolveHandle', [42], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('an unminted handle → InvalidRequest (-1)', async () => {
+    h.provider.getAssetAddresses.mockResolvedValue([]); // no holder under either unit
+    await expect(handleCip30('resolveHandle', ['$nope'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('is origin-gated: a non-enabled origin → Refused (-3)', async () => {
+    h.state.allow.delete(ORIGIN);
+    await expect(handleCip30('resolveHandle', ['$alice'], ORIGIN)).rejects.toMatchObject({ code: -3 });
   });
 });

@@ -9,8 +9,9 @@ import type { Network, ChainTip, AssetMetadata } from '../background/provider/IC
 import type { TxSummary } from '../core/tx/summary';
 import type { HistoryEntry } from '../core/tx/history';
 import type { PendingApproval } from '../background/dapp/approvals';
+import type { ResolvedHandle } from '../core/handle';
 
-export type { ChainTip, TxSummary, HistoryEntry, PendingApproval, AssetMetadata };
+export type { ChainTip, TxSummary, HistoryEntry, PendingApproval, AssetMetadata, ResolvedHandle };
 
 /** Result of building a send: an id binding the approval to the exact decoded summary shown. */
 export interface BuiltTx {
@@ -70,7 +71,8 @@ export type WalletCommand =
   | { type: 'listUtxos' }
   | { type: 'getTxStatus'; txHash: string }
   | { type: 'getAssetMetadata'; unit: string }
-  | { type: 'getAssetImage'; uri: string };
+  | { type: 'getAssetImage'; uri: string }
+  | { type: 'resolveHandle'; handle: string };
 
 export interface InternalRequest {
   target: typeof INTERNAL_TARGET;

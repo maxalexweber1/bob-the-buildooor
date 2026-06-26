@@ -44,6 +44,25 @@ export function parseCip67(assetNameHex: string): Cip67Label | undefined {
   return { label, contentHex: assetNameHex.slice(8) };
 }
 
+/**
+ * Build a CIP-67 asset name: the 4-byte label prefix + content (hex). The exact inverse of
+ * {@link parseCip67} — `parseCip67(encodeCip67(l, c))` round-trips. Used to construct a CIP-68 (222)
+ * unit for on-chain lookups (e.g. ADA Handle resolution, T8.1). `label` must fit in 16 bits and
+ * `contentHex` must be even-length hex. The checksum is the same CRC-8/SMBUS over the 2 label bytes.
+ */
+export function encodeCip67(label: number, contentHex = ''): string {
+  if (!Number.isInteger(label) || label < 0 || label > 0xffff) throw new Error('cip67: label out of 16-bit range');
+  if (contentHex.length % 2 !== 0 || !/^[0-9a-f]*$/i.test(contentHex)) throw new Error('cip67: contentHex must be even-length hex');
+  const crc = crc8([(label >> 8) & 0xff, label & 0xff]);
+  // Inverse of the parser's bit layout: `0000 …label(16)… …crc(8)… 0000`.
+  const b0 = (label >> 12) & 0x0f;
+  const b1 = (label >> 4) & 0xff;
+  const b2 = ((label & 0x0f) << 4) | ((crc >> 4) & 0x0f);
+  const b3 = (crc & 0x0f) << 4;
+  const prefix = [b0, b1, b2, b3].map((b) => b.toString(16).padStart(2, '0')).join('');
+  return prefix + contentHex.toLowerCase();
+}
+
 /** Short human badge for the standard CIP-68 token classes; undefined for other/unknown labels. */
 export function cip67LabelName(label: number): string | undefined {
   switch (label) {
