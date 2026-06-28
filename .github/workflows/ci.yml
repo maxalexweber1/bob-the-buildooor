@@ -19,9 +19,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 20 = the engines floor (catches use of newer-only APIs); 22 = current LTS (catches breakage
-        # on a newer runtime). Bump/extend (e.g. 24) as the support window moves.
-        node-version: [20, 22]
+        # 22 = current LTS; 24 = latest. Run on both to catch runtime-specific breakage.
+        node-version: [22, 24]
     steps:
       - uses: actions/checkout@v4
 
