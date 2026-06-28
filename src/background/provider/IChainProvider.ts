@@ -84,6 +84,14 @@ export interface IChainProvider {
   isUsed(address: string): Promise<boolean>;
 
   // ---- optional capabilities (a provider may omit or throw ProviderUnsupportedError) ----
+  /**
+   * Batched multi-address UTxO query — every UTxO held by ANY of `addresses`, in one round-trip.
+   * The point is Ogmios: its `queryLedgerState/utxo` has no address index and scans the whole ledger
+   * UTxO set per call, so a gap-limit discovery of ~40 one-address queries blows the SW timeout. Passing
+   * the whole address window in one call pays that scan ONCE for the batch. Optional: providers with a
+   * per-address index (Blockfrost/Koios) omit it and callers fall back to parallel `getUtxos`.
+   */
+  getUtxosForAddresses?(addresses: string[]): Promise<UTxO[]>;
   /** Authoritative Plutus ex-units (Ogmios). Absent on Blockfrost-REST / gerolamo for now. */
   evaluateTx?(txCbor: string): Promise<ScriptEvalResult[]>;
   getTip?(): Promise<ChainTip>;

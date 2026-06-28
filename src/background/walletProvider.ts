@@ -12,6 +12,8 @@ export async function getProvider(): Promise<IChainProvider> {
     kind: s.providerKind,
     network: s.network,
     ogmiosUrl: s.ogmiosUrl,
+    kupoUrl: s.kupoUrl,
+    historyBackend: s.historyBackend,
     blockfrostProjectId: s.blockfrostProjectIds?.[s.network],
     koiosApiKey: s.koiosApiKey,
     koiosUrl: s.koiosUrl,

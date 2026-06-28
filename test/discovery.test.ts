@@ -3,6 +3,7 @@ import { mnemonicToRoot, Role } from '../src/core/keys';
 import { baseAddress } from '../src/core/address';
 import { discoverChain, nextReceiveIndex } from '../src/background/discovery';
 import type { IChainProvider } from '../src/background/provider/index';
+import { toUtxo } from '../src/background/provider/mappers';
 
 const ZERO_24 = 'abandon '.repeat(23) + 'art';
 const root = mnemonicToRoot(ZERO_24);
@@ -22,6 +23,35 @@ function fakeProvider(usedAddresses: Set<string>): IChainProvider {
     getGenesisInfos: () => Promise.reject(new Error('not used')),
     submitTx: () => Promise.reject(new Error('not used')),
   };
+}
+
+const TXID = '2b8216b428b5292a4b13075cf37b26434f890a4ffcce1f75da1f85d2297efe83';
+
+/**
+ * Batched provider (the Ogmios path): exposes `getUtxosForAddresses`, returning a 1-lovelace UTxO for
+ * each queried address that is "used". `isUsed`/`getUtxos` THROW — so the test also proves discovery
+ * took the batched branch and never fell back to per-address probing.
+ */
+function fakeBatchedProvider(usedAddresses: Set<string>): IChainProvider & { calls: number } {
+  const p = {
+    name: 'fake-batched',
+    network: 'preview' as const,
+    calls: 0,
+    getUtxosForAddresses(addresses: string[]) {
+      p.calls++;
+      const utxos = addresses
+        .filter((a) => usedAddresses.has(a))
+        .map((a) => toUtxo({ txHash: TXID, outputIndex: 0, address: a, amount: [{ unit: 'lovelace', quantity: '1000000' }] }));
+      return Promise.resolve(utxos);
+    },
+    isUsed: () => Promise.reject(new Error('batched path must not call isUsed')),
+    getUtxos: () => Promise.reject(new Error('batched path must not call getUtxos')),
+    resolveUtxos: () => Promise.reject(new Error('not used')),
+    getProtocolParameters: () => Promise.reject(new Error('not used')),
+    getGenesisInfos: () => Promise.reject(new Error('not used')),
+    submitTx: () => Promise.reject(new Error('not used')),
+  };
+  return p;
 }
 
 describe('gap-limit discovery (T2.4)', () => {
@@ -51,5 +81,36 @@ describe('gap-limit discovery (T2.4)', () => {
         { index: 3, address: 'b', role: Role.External },
       ]),
     ).toBe(4);
+  });
+});
+
+describe('gap-limit discovery — batched (Ogmios path)', () => {
+  it('matches the per-address result and uses only the batched query', async () => {
+    const provider = fakeBatchedProvider(new Set([extAddr(0), extAddr(1)]));
+    const used = await discoverChain(root, 'preview', Role.External, provider, 3);
+    expect(used.map((u) => u.index)).toEqual([0, 1]);
+    expect(provider.calls).toBeGreaterThan(0); // proves the batched branch ran (isUsed would have thrown)
+  });
+
+  it('stops after a full window of unused addresses (gap hides later usage), same as per-address', async () => {
+    // index 0 used, then 1/2/3 unused (== gapLimit 3) → never reaches index 4.
+    const provider = fakeBatchedProvider(new Set([extAddr(0), extAddr(4)]));
+    const used = await discoverChain(root, 'preview', Role.External, provider, 3);
+    expect(used.map((u) => u.index)).toEqual([0]);
+  });
+
+  it('finds used addresses that span multiple windows', async () => {
+    // 0,1 used → window resumes at 2; index 3 (< gap of 3 after 1) still found; then a clean gap.
+    const provider = fakeBatchedProvider(new Set([extAddr(0), extAddr(1), extAddr(3)]));
+    const used = await discoverChain(root, 'preview', Role.External, provider, 3);
+    expect(used.map((u) => u.index)).toEqual([0, 1, 3]);
+    expect(provider.calls).toBeGreaterThanOrEqual(2); // crossed at least one window boundary
+  });
+
+  it('finds nothing for a fresh wallet (single empty window)', async () => {
+    const provider = fakeBatchedProvider(new Set());
+    const used = await discoverChain(root, 'preview', Role.External, provider, 3);
+    expect(used).toEqual([]);
+    expect(provider.calls).toBe(1);
   });
 });

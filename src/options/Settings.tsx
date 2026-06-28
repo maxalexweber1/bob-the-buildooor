@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
 import type { WalletSettings } from '../shared/internal';
 import type { Network } from '../background/provider/IChainProvider';
-import type { ProviderKind } from '../background/provider/index';
+import type { HistoryBackend, ProviderKind } from '../background/provider/index';
 
 const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
 const PROVIDERS: ProviderKind[] = ['blockfrost', 'koios', 'ogmios'];
@@ -80,7 +80,7 @@ export function Settings() {
         </select>
       </Label>
 
-      {s.providerKind === 'blockfrost' && (
+      {(s.providerKind === 'blockfrost' || s.historyBackend === 'blockfrost') && (
         <Label text={`Blockfrost project id (${s.network})`}>
           <input type="password" value={bfKey} autoComplete="off" placeholder={`${s.network}…`} onChange={(e) => setBfKey(e.target.value)} style={input} />
         </Label>
@@ -93,9 +93,35 @@ export function Settings() {
       )}
 
       {s.providerKind === 'ogmios' && (
-        <Label text="Ogmios URL (local node)">
-          <input type="text" value={s.ogmiosUrl ?? ''} autoComplete="off" placeholder="ws://localhost:1337" onChange={(e) => patch({ ogmiosUrl: e.target.value })} style={input} />
-        </Label>
+        <>
+          <Label text="Ogmios URL (local node)">
+            <input type="text" value={s.ogmiosUrl ?? ''} autoComplete="off" placeholder="ws://localhost:1337" onChange={(e) => patch({ ogmiosUrl: e.target.value })} style={input} />
+          </Label>
+          <Label text="Kupo URL (recommended for Ogmios)">
+            <input type="text" value={s.kupoUrl ?? ''} autoComplete="off" placeholder="http://localhost:1442" onChange={(e) => patch({ kupoUrl: e.target.value })} style={input} />
+          </Label>
+          <p style={{ ...hint, marginTop: 0 }}>
+            Ogmios has no address index, so balance/discovery is very slow without Kupo. Run Kupo
+            alongside your node and set its URL here — address lookups then resolve instantly. Leave
+            blank to use Ogmios alone (slow).
+          </p>
+          <Label text="History &amp; token metadata (dual mode)">
+            <select
+              value={s.historyBackend ?? ''}
+              onChange={(e) => patch({ historyBackend: (e.target.value || undefined) as HistoryBackend | undefined })}
+              style={input}
+            >
+              <option value="">None (local only)</option>
+              <option value="blockfrost">Blockfrost</option>
+              <option value="koios">Koios</option>
+            </select>
+          </Label>
+          <p style={{ ...hint, marginTop: 0 }}>
+            Ogmios + Kupo can&apos;t serve transaction history, token names/images or ADA-Handle
+            lookup. Pick a remote indexer to supply those while your local node stays in charge of
+            balances, signing and submission. Leave as “None” to stay fully local.
+          </p>
+        </>
       )}
 
       <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: '16px 0 4px', cursor: 'pointer' }}>

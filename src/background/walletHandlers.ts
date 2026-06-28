@@ -12,6 +12,7 @@ import { buildSend } from '../core/tx/build';
 import { summarizeTx } from '../core/tx/summary';
 import { computeHistoryEntry, type HistoryEntry } from '../core/tx/history';
 import type { AddressTxRef, AssetMetadata } from './provider/IChainProvider';
+import { collectUtxos } from './provider/index';
 import { signTxCbor } from './signer';
 import { toHex } from '../core/crypto/encoding';
 import { settings } from './settings';
@@ -50,7 +51,7 @@ async function overview(): Promise<WalletOverview> {
   const addresses = [...external, ...change].map((a) => a.address);
   // Include the next receive address so a freshly-funded new wallet still shows a balance.
   if (!addresses.includes(receiveAddress)) addresses.push(receiveAddress);
-  const utxos = (await Promise.all(addresses.map((a) => provider.getUtxos(a)))).flat();
+  const utxos = await collectUtxos(provider, addresses);
 
   const data: WalletOverview = {
     network: s.network,
@@ -132,7 +133,7 @@ async function listUtxos(): Promise<UtxoView[]> {
   const addrs = [...external, ...change].map((a) => a.address);
   if (!addrs.includes(receiveAddress)) addrs.push(receiveAddress);
 
-  const utxos = (await Promise.all(addrs.map((a) => provider.getUtxos(a)))).flat();
+  const utxos = await collectUtxos(provider, addrs);
   const data: UtxoView[] = utxos.map((u) => ({
     txHash: u.utxoRef.id.toString(),
     outputIndex: u.utxoRef.index,
@@ -207,7 +208,7 @@ async function buildSendTx(toAddress: string, lovelace: string, memo?: string): 
 
   // Candidate UTxOs to fund the tx: everything at our known addresses (+ next receive addr).
   const fundingAddrs = [...ownerByAddress.keys()];
-  const utxos = (await Promise.all(fundingAddrs.map((a) => provider.getUtxos(a)))).flat();
+  const utxos = await collectUtxos(provider, fundingAddrs);
 
   const tx = buildSend(
     {

@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
 import type { WalletSettings } from '../shared/internal';
 import type { Network } from '../background/provider/IChainProvider';
-import type { ProviderKind } from '../background/provider/index';
+import type { HistoryBackend, ProviderKind } from '../background/provider/index';
 import { ProviderBadge, card } from './ui';
 
 const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
@@ -52,6 +52,9 @@ export function ProviderSettings() {
     if (!s) return;
     // Request first so the click's user gesture is still active for chrome.permissions.request.
     if (s.providerKind === 'koios') await ensureHostPermission(s.koiosUrl);
+    // Kupo is a custom http(s) host (e.g. http://localhost:1442) not in the static manifest — the SW
+    // fetch needs its host permission. Covered by optional_host_permissions http(s)://*/*.
+    if (s.providerKind === 'ogmios') await ensureHostPermission(s.kupoUrl);
     setBusy(true);
     setStatus(testAfter ? 'Testing…' : null);
     try {
@@ -96,7 +99,7 @@ export function ProviderSettings() {
           </select>
         </Field>
 
-        {s.providerKind === 'blockfrost' && (
+        {(s.providerKind === 'blockfrost' || s.historyBackend === 'blockfrost') && (
           <Field label={`Blockfrost project id (${s.network})`}>
             <input type="password" value={bfKey} autoComplete="off" placeholder={`${s.network}…`} onChange={(e) => setBfKey(e.target.value)} style={input} />
           </Field>
@@ -112,9 +115,25 @@ export function ProviderSettings() {
           </>
         )}
         {s.providerKind === 'ogmios' && (
-          <Field label="Ogmios URL (local node)">
-            <input type="text" value={s.ogmiosUrl ?? ''} autoComplete="off" placeholder="ws://localhost:1337" onChange={(e) => patch({ ogmiosUrl: e.target.value })} style={input} />
-          </Field>
+          <>
+            <Field label="Ogmios URL (local node)">
+              <input type="text" value={s.ogmiosUrl ?? ''} autoComplete="off" placeholder="ws://localhost:1337" onChange={(e) => patch({ ogmiosUrl: e.target.value })} style={input} />
+            </Field>
+            <Field label="Kupo URL (indexed UTxOs — recommended)">
+              <input type="text" value={s.kupoUrl ?? ''} autoComplete="off" placeholder="http://localhost:1442" onChange={(e) => patch({ kupoUrl: e.target.value })} style={input} />
+            </Field>
+            <Field label="History & token metadata (dual mode)">
+              <select
+                value={s.historyBackend ?? ''}
+                onChange={(e) => patch({ historyBackend: (e.target.value || undefined) as HistoryBackend | undefined })}
+                style={input}
+              >
+                <option value="">None (local only)</option>
+                <option value="blockfrost">Blockfrost</option>
+                <option value="koios">Koios</option>
+              </select>
+            </Field>
+          </>
         )}
       </div>
 
@@ -127,7 +146,12 @@ export function ProviderSettings() {
         </button>
       </div>
       {status && <p style={{ fontSize: 12, marginTop: 10, color: '#2d3748' }}>{status}</p>}
-      <p style={{ fontSize: 11, color: '#a0aec0', marginTop: 8 }}>Ogmios has no transaction history — Activity needs Blockfrost or Koios.</p>
+      {s.providerKind === 'ogmios' && !s.historyBackend && (
+        <p style={{ fontSize: 11, color: '#a0aec0', marginTop: 8 }}>
+          Ogmios has no transaction history or token metadata — set “History &amp; token metadata” to
+          Blockfrost or Koios for Activity, token names and ADA Handles.
+        </p>
+      )}
     </div>
   );
 }

@@ -155,8 +155,18 @@ export class OgmiosProvider implements IChainProvider {
     return Promise.resolve(genesisInfosFor(this.network));
   }
 
-  async getUtxos(address: string): Promise<UTxO[]> {
-    const rows = await this.client.request<OgmiosUtxo[]>('queryLedgerState/utxo', { addresses: [address] });
+  getUtxos(address: string): Promise<UTxO[]> {
+    return this.getUtxosForAddresses([address]);
+  }
+
+  /**
+   * All UTxOs across `addresses` in ONE `queryLedgerState/utxo`. Ogmios scans the full ledger UTxO set
+   * once for the whole batch (it has no per-address index), so this is what makes gap-limit discovery
+   * over a local node viable — see the per-window batching in `discovery.ts`. Empty input → no query.
+   */
+  async getUtxosForAddresses(addresses: string[]): Promise<UTxO[]> {
+    if (addresses.length === 0) return [];
+    const rows = await this.client.request<OgmiosUtxo[]>('queryLedgerState/utxo', { addresses });
     return rows.map((u) =>
       toUtxo({ txHash: u.transaction.id, outputIndex: u.index, address: u.address, amount: ogmiosValueToUnits(u.value) }),
     );

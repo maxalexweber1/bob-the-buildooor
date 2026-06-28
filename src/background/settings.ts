@@ -2,13 +2,25 @@
 // chrome.storage.local. The Blockfrost API key is NOT here for now: in dev it comes from the Vite
 // env (.env, baked at build); production key entry is a later Settings.tsx task. No secrets stored.
 import { chromeLocalStore, type KeyValueStore } from './storage';
-import type { Network, ProviderKind } from './provider/index';
+import type { HistoryBackend, Network, ProviderKind } from './provider/index';
 
 export interface WalletSettings {
   network: Network;
   providerKind: ProviderKind;
   /** Ogmios websocket URL (providerKind='ogmios'), e.g. ws://localhost:1337 for a local node. */
   ogmiosUrl?: string | undefined;
+  /**
+   * Optional Kupo base URL (providerKind='ogmios'), e.g. http://localhost:1442. When set, address/UTxO
+   * reads use Kupo's index (fast discovery) and Ogmios is used only for params/submit/evaluate. Ogmios
+   * by itself scans the full UTxO set per address query and is too slow for interactive discovery.
+   */
+  kupoUrl?: string | undefined;
+  /**
+   * "Dual mode" (providerKind='ogmios'): borrow tx history, token names/images, ADA-Handle lookup and
+   * confirmation polling from a remote indexer while the local Ogmios+Kupo stack stays authoritative
+   * for state/submit/eval. Reuses the Blockfrost/Koios credentials below. Undefined = local only.
+   */
+  historyBackend?: HistoryBackend | undefined;
   /** Per-network Blockfrost project ids. Not wallet key material — but still user-scoped credentials. */
   blockfrostProjectIds?: Partial<Record<Network, string>> | undefined;
   /** Optional Koios bearer token (free tier works without one). */

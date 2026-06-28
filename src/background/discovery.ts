@@ -26,6 +26,12 @@ export async function discoverChain(
 ): Promise<DiscoveredAddress[]> {
   const bech32 = bech32Network(network);
   const keys = accountKeys(root, 0); // derive account + stake once; cheap per-address below
+
+  // Providers without an address index (Ogmios) scan the whole ledger UTxO set per by-address query,
+  // so probing 40 addresses one-at-a-time times out. When the provider exposes a batched lookup, walk
+  // a gap-limit WINDOW per round-trip instead (one full-set scan covers the whole window).
+  if (provider.getUtxosForAddresses) return discoverChainBatched(keys, bech32, role, provider, gapLimit);
+
   const used: DiscoveredAddress[] = [];
   let consecutiveUnused = 0;
 
@@ -37,6 +43,41 @@ export async function discoverChain(
     } else {
       consecutiveUnused++;
     }
+  }
+  return used;
+}
+
+/**
+ * Batched gap-limit discovery for index-less providers (Ogmios). Queries a window of `gapLimit`
+ * addresses in ONE `getUtxosForAddresses` call; "used" = the address appears in the returned UTxOs
+ * (same current-UTxO approximation as `isUsed` on Ogmios — see its note). A window with zero used
+ * addresses means `gapLimit` consecutive unused → stop; otherwise resume one past the last used index.
+ * Worst case ~one scan per used cluster + a trailing empty window, vs. one scan per address before.
+ */
+async function discoverChainBatched(
+  keys: ReturnType<typeof accountKeys>,
+  bech32: ReturnType<typeof bech32Network>,
+  role: PaymentRole,
+  provider: IChainProvider,
+  gapLimit: number,
+): Promise<DiscoveredAddress[]> {
+  const lookup = provider.getUtxosForAddresses;
+  if (!lookup) return []; // unreachable (guarded by the caller); satisfies the type narrowing
+  const used: DiscoveredAddress[] = [];
+
+  for (let start = 0; start < MAX_SCAN; ) {
+    const end = Math.min(start + gapLimit, MAX_SCAN);
+    const window: DiscoveredAddress[] = [];
+    for (let index = start; index < end; index++) {
+      window.push({ index, address: baseAddressFrom(keys, bech32, index, role), role });
+    }
+    const utxos = await lookup.call(provider, window.map((w) => w.address));
+    const usedAddrs = new Set<string>(utxos.map((u) => u.resolved.address.toString()));
+    const windowUsed = window.filter((w) => usedAddrs.has(w.address));
+    const last = windowUsed[windowUsed.length - 1];
+    if (!last) break; // whole window unused → gap limit reached
+    used.push(...windowUsed);
+    start = last.index + 1;
   }
   return used;
 }

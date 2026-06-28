@@ -3,6 +3,7 @@ import { TxBuilder, defaultPreviewGenesisInfos } from '@harmoniclabs/buildooor';
 import { BlockfrostProvider } from '../src/background/provider/blockfrost';
 import { KoiosProvider } from '../src/background/provider/koios';
 import { OgmiosProvider } from '../src/background/provider/ogmios';
+import { KupoClient, OgmiosKupoProvider, kupoValueToUnits } from '../src/background/provider/ogmios-kupo';
 import { createProvider } from '../src/background/provider/index';
 import { ogmiosValueToUnits, parseRatio } from '../src/background/provider/mappers';
 
@@ -310,6 +311,36 @@ describe('OgmiosProvider (fake WebSocket JSON-RPC)', () => {
     expect(utxos[0]?.resolved.value.lovelaces).toBe(4250000n);
   });
 
+  it('getUtxosForAddresses batches every address into ONE query (the discovery fix)', async () => {
+    let calls = 0;
+    let sentAddresses: unknown;
+    const p = ogmiosProvider((method, params) => {
+      if (method === 'queryLedgerState/utxo') {
+        calls++;
+        sentAddresses = (params as { addresses: string[] }).addresses;
+        return [
+          { transaction: { id: TXID }, index: 0, address: ADDR, value: { ada: { lovelace: 1_000_000 } } },
+          { transaction: { id: TXID }, index: 1, address: ADDR, value: { ada: { lovelace: 2_000_000 } } },
+        ];
+      }
+      return null;
+    });
+    const utxos = await p.getUtxosForAddresses([ADDR, ADDR]);
+    expect(calls).toBe(1); // one ledger-set scan for the whole batch — the whole point of T-batched
+    expect(sentAddresses).toEqual([ADDR, ADDR]);
+    expect(utxos).toHaveLength(2);
+  });
+
+  it('getUtxosForAddresses with no addresses makes no query', async () => {
+    let calls = 0;
+    const p = ogmiosProvider((method) => {
+      if (method === 'queryLedgerState/utxo') calls++;
+      return [];
+    });
+    expect(await p.getUtxosForAddresses([])).toEqual([]);
+    expect(calls).toBe(0);
+  });
+
   it('maps protocol parameters (ratio prices) into a usable TxBuilder', async () => {
     const p = ogmiosProvider((m) => (m === 'queryLedgerState/protocolParameters' ? OGMIOS_PARAMS : null));
     const pp = await p.getProtocolParameters();
@@ -358,6 +389,138 @@ describe('OgmiosProvider (fake WebSocket JSON-RPC)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+const KUPO_MATCH = {
+  transaction_id: TXID,
+  output_index: 0,
+  address: ADDR,
+  value: { coins: 4250000, assets: { '279c909f348e533da5808898f87f9a14bb2c3dfbbacccd631d927a3f.534e4654': 7 } },
+  datum_hash: null,
+  script_hash: null,
+};
+
+describe('Kupo + Ogmios composite (mocked fetch)', () => {
+  it('kupoValueToUnits maps coins + dot-separated assets to the concatenated unit form', () => {
+    expect(kupoValueToUnits({ coins: 1_000_000, assets: { 'aa.bb': 3, 'cc.': 1 } })).toEqual([
+      { unit: 'lovelace', quantity: '1000000' },
+      { unit: 'aabb', quantity: '3' },
+      { unit: 'cc', quantity: '1' }, // nameless asset: the trailing dot is dropped, not kept
+    ]);
+  });
+
+  it('KupoClient.unspentAt queries /matches/{addr}?unspent and maps the UTxO', async () => {
+    const fetchMock = vi.fn(async () => res([KUPO_MATCH]));
+    vi.stubGlobal('fetch', fetchMock);
+    const utxos = await new KupoClient('http://localhost:1442/').unspentAt(ADDR); // trailing slash tolerated
+    expect(utxos).toHaveLength(1);
+    expect(utxos[0]?.resolved.value.lovelaces).toBe(4250000n);
+    const url = String(fetchMock.mock.calls[0]?.[0]);
+    expect(url).toContain('/matches/');
+    expect(url).toContain('?unspent');
+    expect(url).not.toContain('//matches'); // base trailing slash was normalized
+  });
+
+  it('hasMatch is true when Kupo returns rows, false on 404 (unused address)', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res([KUPO_MATCH])));
+    expect(await new KupoClient('http://localhost:1442').hasMatch(ADDR)).toBe(true);
+    vi.stubGlobal('fetch', vi.fn(async () => res('Not Found', 404)));
+    expect(await new KupoClient('http://localhost:1442').hasMatch(ADDR)).toBe(false);
+  });
+
+  it('composite routes getUtxos + isUsed to Kupo HTTP (the Ogmios socket is never opened)', async () => {
+    const fetchMock = vi.fn(async () => res([KUPO_MATCH]));
+    vi.stubGlobal('fetch', fetchMock);
+    const p = new OgmiosKupoProvider('preview', 'ws://localhost:1337', 'http://localhost:1442', {
+      wsFactory: (u) => new FakeWebSocket(u, () => null) as unknown as WebSocket,
+    });
+    expect((await p.getUtxos(ADDR))[0]?.resolved.value.lovelaces).toBe(4250000n);
+    expect(await p.isUsed(ADDR)).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2); // both served by Kupo; Ogmios ws untouched
+  });
+
+  it('rejects a non-http(s) Kupo URL', () => {
+    expect(() => new KupoClient('ws://localhost:1442')).toThrow(/http/);
+  });
+});
+
+describe('CompositeProvider (capability split / dual mode)', () => {
+  // A bare primary: implements only core + evaluateTx/getTip, NO history/metadata (like Ogmios+Kupo).
+  function localPrimary(overrides: Partial<IChainProvider> = {}): IChainProvider {
+    return {
+      name: 'local',
+      network: 'preview',
+      getGenesisInfos: () => Promise.reject(new Error('genesis')),
+      getProtocolParameters: () => Promise.reject(new Error('params')),
+      getUtxos: () => Promise.resolve([]),
+      isUsed: () => Promise.resolve(false),
+      resolveUtxos: () => Promise.resolve([]),
+      submitTx: () => Promise.resolve('LOCAL_TXID'),
+      evaluateTx: () => Promise.resolve([{ validator: { purpose: 'spend', index: 0 }, budget: { memory: 1, cpu: 2 } }]),
+      ...overrides,
+    };
+  }
+  // A remote indexer: implements the history/metadata extras (like Blockfrost).
+  function remoteSecondary(): IChainProvider {
+    return {
+      name: 'remote',
+      network: 'preview',
+      getGenesisInfos: () => Promise.reject(new Error('should not be used')),
+      getProtocolParameters: () => Promise.reject(new Error('should not be used')),
+      getUtxos: () => Promise.reject(new Error('core must come from primary')),
+      isUsed: () => Promise.reject(new Error('core must come from primary')),
+      resolveUtxos: () => Promise.reject(new Error('core must come from primary')),
+      submitTx: () => Promise.reject(new Error('core must come from primary')),
+      getAssetMetadata: () => Promise.resolve({ name: 'RemoteToken' }),
+      getAssetAddresses: () => Promise.resolve([{ address: ADDR, quantity: '1' }]),
+      isConfirmed: () => Promise.resolve(true),
+    };
+  }
+
+  it('routes core reads/writes to the primary, history/metadata to the secondary', async () => {
+    const { CompositeProvider } = await import('../src/background/provider/composite');
+    const p = new CompositeProvider(localPrimary(), remoteSecondary());
+    expect(await p.submitTx('cbor')).toBe('LOCAL_TXID'); // submit → primary (local node)
+    expect(await p.getAssetMetadata?.('a'.repeat(56))).toEqual({ name: 'RemoteToken' }); // → secondary
+    expect((await p.getAssetAddresses?.('a'.repeat(56)))?.[0]?.address).toBe(ADDR); // → secondary
+    expect(await p.isConfirmed?.('tx')).toBe(true); // → secondary
+    expect(p.name).toBe('local+remote');
+  });
+
+  it('prefers the primary when it implements an optional capability', async () => {
+    const { CompositeProvider } = await import('../src/background/provider/composite');
+    // primary implements evaluateTx; secondary does NOT — composite must use the primary's.
+    const p = new CompositeProvider(localPrimary(), remoteSecondary());
+    const ev = await p.evaluateTx?.('cbor');
+    expect(ev?.[0]?.budget).toEqual({ memory: 1, cpu: 2 });
+  });
+
+  it('only exposes a capability when some backend implements it', async () => {
+    const { CompositeProvider } = await import('../src/background/provider/composite');
+    const localOnly = new CompositeProvider(localPrimary()); // no secondary
+    expect(localOnly.getAssetMetadata).toBeUndefined(); // neither side has it → stays unsupported
+    expect(localOnly.getAssetAddresses).toBeUndefined();
+    expect(typeof localOnly.evaluateTx).toBe('function'); // primary has it
+  });
+
+  it('reads option routes UTxO reads away from the primary (Ogmios-without-Kupo + Blockfrost)', async () => {
+    const { CompositeProvider } = await import('../src/background/provider/composite');
+    // primary = "ogmios": its address scan must NEVER be used for reads (that's the slow path).
+    const ogmios = localPrimary({
+      getUtxos: () => Promise.reject(new Error('ogmios scan must not serve reads')),
+      isUsed: () => Promise.reject(new Error('ogmios scan must not serve reads')),
+    });
+    const remote: IChainProvider = {
+      ...remoteSecondary(),
+      getUtxos: () => Promise.resolve([]),
+      isUsed: () => Promise.resolve(true),
+    };
+    const p = new CompositeProvider(ogmios, remote, { reads: remote });
+    expect(await p.isUsed('addr')).toBe(true); // → reads (remote), not the throwing primary
+    expect(await p.getUtxos('addr')).toEqual([]); // → reads (remote)
+    expect(await p.submitTx('cbor')).toBe('LOCAL_TXID'); // submit still → primary (local node)
+    expect(await p.evaluateTx?.('cbor')).toBeDefined(); // eval still → primary (Ogmios)
   });
 });
 
