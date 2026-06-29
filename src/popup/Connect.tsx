@@ -94,7 +94,39 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
       {summary.unresolvedInputs > 0 && (
         <p style={{ ...hint, color: '#c05621' }}>⚠ {summary.unresolvedInputs} input(s) could not be resolved for display.</p>
       )}
+      <NodeEvalRows nodeEval={summary.nodeEval} />
       <TxFlagsWarning flags={summary.flags} />
+    </div>
+  );
+}
+
+/**
+ * Plutus cross-check: when the tx carries scripts, we re-run them on the user's OWN node (Ogmios) and
+ * show the authoritative ex-units — "verify against your node, not the dApp's claim". `unavailable`
+ * (no node / inputs unresolvable) is a neutral nudge, not a block — the tx is still signable.
+ */
+function NodeEvalRows({ nodeEval }: { nodeEval: TxSummary['nodeEval'] }) {
+  if (!nodeEval) return null;
+  if (nodeEval.status === 'unavailable') {
+    return (
+      <div style={{ ...hint, color: '#744210', background: '#fffaf0', border: '1px solid #f6e05e', borderRadius: 6, padding: 8, marginTop: 8 }}>
+        🧪 This transaction runs Plutus scripts, not verified on your node. {nodeEval.message}
+      </div>
+    );
+  }
+  return (
+    <div style={{ marginTop: 8, background: '#f0fff4', border: '1px solid #9ae6b4', borderRadius: 6, padding: 8 }}>
+      <div style={{ ...lbl, color: '#22543d' }}>✓ Verified on your node — script execution units</div>
+      {nodeEval.redeemers.map((r, i) => (
+        <div key={i} style={row}>
+          <span>
+            {r.purpose} #{r.index}
+          </span>
+          <span>
+            {r.memory.toLocaleString()} mem / {r.cpu.toLocaleString()} cpu
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

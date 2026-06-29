@@ -18,6 +18,7 @@ import {
   type Tx,
   type UTxO,
 } from '@harmoniclabs/buildooor';
+import type { NodeEval } from './summary';
 
 export interface PlutusSpendParams {
   protocolParameters: ProtocolParameters; // MUST carry real cost models (see file header)
@@ -144,4 +145,41 @@ export async function evaluatePlutusTx(
 ): Promise<Array<{ validator: { purpose: string; index: number }; budget: { memory: number; cpu: number } }> | null> {
   if (!provider.evaluateTx) return null;
   return provider.evaluateTx(txCborHex);
+}
+
+/**
+ * Re-evaluate a (dApp-provided) tx's Plutus scripts against the user's OWN node before signing —
+ * "not your node, not your protocol parameters". Returns the node's authoritative per-redeemer
+ * ex-units so the approval UI can show what the scripts ACTUALLY do on-chain, not just what the dApp
+ * claims. NEVER throws: with no node connected, or a node that can't resolve the inputs, it returns an
+ * `unavailable` result — the tx stays signable (the on-chain submit re-evaluates regardless).
+ *
+ * @param redeemerCount  number of redeemers in the tx (0 → not a Plutus tx → returns undefined).
+ */
+export async function verifyTxOnNode(
+  provider: Evaluator,
+  txCborHex: string,
+  redeemerCount: number,
+): Promise<NodeEval | undefined> {
+  if (redeemerCount <= 0) return undefined; // no scripts → nothing to cross-check
+  if (!provider.evaluateTx) {
+    return { status: 'unavailable', redeemers: [], message: 'Connect Ogmios to verify these scripts against your own node.' };
+  }
+  try {
+    const results = await provider.evaluateTx(txCborHex);
+    return {
+      status: 'verified',
+      redeemers: results.map((r) => ({
+        purpose: r.validator.purpose,
+        index: r.validator.index,
+        memory: r.budget.memory,
+        cpu: r.budget.cpu,
+      })),
+    };
+  } catch (e) {
+    // Benign: the node may not see the inputs (not synced / off-chain), or isn't reachable. Surface as
+    // "couldn't verify", not an error — and truncate so an upstream message can't bloat the approval.
+    const why = e instanceof Error ? e.message : 'evaluation failed';
+    return { status: 'unavailable', redeemers: [], message: `Your node could not evaluate this tx: ${why.slice(0, 160)}` };
+  }
 }

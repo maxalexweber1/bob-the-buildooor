@@ -35,6 +35,7 @@ import {
   type AccountKeys,
 } from '../../core/address';
 import { summarizeTx } from '../../core/tx/summary';
+import { verifyTxOnNode } from '../../core/tx/plutusBuild';
 import { valueView } from '../../core/balance';
 import { buildCoseSign1 } from '../../core/cose/sign';
 import { signTxWitnessSet } from '../signer';
@@ -232,6 +233,12 @@ async function signTx(
   const resolved = await provider.resolveUtxos([...tx.body.inputs].map((i) => i.utxoRef));
   const owners = await ownerMap(root, s, provider, keys);
   const summary = summarizeTx(tx, resolved, new Set(owners.keys()));
+
+  // Anti-blind-sign for Plutus (CLAUDE.md §1.5): when the tx carries scripts AND we have a node
+  // (Ogmios `evaluateTx`), re-run the scripts on the USER's own node and show the authoritative
+  // ex-units in the approval. Never blocks signing — 'unavailable' if no node / inputs unresolvable.
+  const nodeEval = await verifyTxOnNode(provider, txCbor, tx.witnesses.redeemers?.length ?? 0);
+  if (nodeEval) summary.nodeEval = nodeEval;
 
   if (!(await requestApproval('signTx', origin, summary))) {
     throw new Cip30Error(TxSignErrorCode.UserDeclined, 'user declined signing');

@@ -4,6 +4,7 @@ import { mnemonicToRoot, deriveKey, Role } from '../src/core/keys';
 import { baseAddress } from '../src/core/address';
 import { buildSend, type BuildContext } from '../src/core/tx/build';
 import { summarizeTx } from '../src/core/tx/summary';
+import { verifyTxOnNode } from '../src/core/tx/plutusBuild';
 import { signTxCbor, signTxWitnessSet } from '../src/background/signer';
 import { toHex } from '../src/core/crypto/encoding';
 
@@ -140,5 +141,35 @@ describe('signTxCbor (T3.2)', () => {
     const payKey = deriveKey(root, 0, Role.External, 0);
     const wsHex = signTxWitnessSet(toHex(tx.toCborBytes()), [payKey]);
     expect(TxWitnessSet.fromCbor(wsHex).vkeyWitnesses?.length).toBe(1);
+  });
+});
+
+describe('verifyTxOnNode (Plutus cross-check on your own node)', () => {
+  const SPEND = [{ validator: { purpose: 'spend', index: 0 }, budget: { memory: 1700, cpu: 476468 } }];
+
+  it('returns undefined for a non-Plutus tx (no redeemers → nothing to verify)', async () => {
+    const provider = { evaluateTx: () => Promise.resolve(SPEND) };
+    expect(await verifyTxOnNode(provider, 'deadbeef', 0)).toBeUndefined();
+  });
+
+  it('returns the node ex-units when the provider can evaluate', async () => {
+    const provider = { evaluateTx: () => Promise.resolve(SPEND) };
+    const res = await verifyTxOnNode(provider, 'deadbeef', 1);
+    expect(res?.status).toBe('verified');
+    expect(res?.redeemers).toEqual([{ purpose: 'spend', index: 0, memory: 1700, cpu: 476468 }]);
+  });
+
+  it('is unavailable (not an error) when no node can evaluate', async () => {
+    const res = await verifyTxOnNode({}, 'deadbeef', 1);
+    expect(res?.status).toBe('unavailable');
+    expect(res?.redeemers).toEqual([]);
+    expect(res?.message).toMatch(/Ogmios/);
+  });
+
+  it('never throws — a node eval error degrades to unavailable with a truncated reason', async () => {
+    const provider = { evaluateTx: () => Promise.reject(new Error('x'.repeat(500))) };
+    const res = await verifyTxOnNode(provider, 'deadbeef', 1);
+    expect(res?.status).toBe('unavailable');
+    expect((res?.message ?? '').length).toBeLessThan(220); // upstream message truncated
   });
 });

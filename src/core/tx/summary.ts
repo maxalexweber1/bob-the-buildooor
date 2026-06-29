@@ -35,6 +35,26 @@ export interface TxFlags {
   requiredSigners: boolean;
 }
 
+/** One redeemer's node-authoritative ex-units (from Ogmios `evaluateTransaction`). */
+export interface NodeEvalRedeemer {
+  purpose: string; // spend | mint | publish | withdraw | vote | propose
+  index: number;
+  memory: number;
+  cpu: number;
+}
+
+/**
+ * Result of re-evaluating a (dApp-provided) Plutus tx against the user's OWN node before signing —
+ * "verify against your node, not the dApp's word". `verified` = the node ran every script and these
+ * are its authoritative ex-units; `unavailable` = no node connected, or the node couldn't evaluate
+ * (e.g. can't resolve the inputs) — NOT a failure: the tx stays signable (submit re-evaluates anyway).
+ */
+export interface NodeEval {
+  status: 'verified' | 'unavailable';
+  redeemers: NodeEvalRedeemer[];
+  message?: string;
+}
+
 export interface TxSummary {
   inputs: TxIO[];
   outputs: Array<TxIO & { isOwn: boolean }>;
@@ -51,6 +71,8 @@ export interface TxSummary {
   governance: GovernanceView;
   /** Decoded CIP-20 message/memo (label 674), when the tx carries one. */
   message?: TxMessage;
+  /** Node cross-check of the tx's Plutus scripts (set by the signer when the tx carries redeemers). */
+  nodeEval?: NodeEval;
   flags: TxFlags;
 }
 
