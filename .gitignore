@@ -41,3 +41,6 @@ docs/PR-*.md
 
 # Local review working doc — findings are resolved in-code; not part of the committed docs.
 docs/WALLET_REVIEW_FINDINGS.md
+
+# Local agent instructions (Codex etc.) — not part of the committed repo.
+AGENTS.md

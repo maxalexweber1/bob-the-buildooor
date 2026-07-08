@@ -72,8 +72,11 @@ describe('Vault (T1.5)', () => {
   it('NEVER writes the plaintext seed (or password) to storage', async () => {
     await vault.create(MNEMONIC, PASSWORD);
     const disk = store.dump();
-    expect(disk).not.toContain('abandon'); // any seed word
-    expect(disk).not.toContain('art');
+    // 'abandon' (7 chars) is the leak canary — any plaintext leak of this mnemonic contains it.
+    // Do NOT assert on short words like 'art': random base64 (salt/iv/ciphertext/key) hits a
+    // 3-char substring by coincidence often enough to flake CI.
+    expect(disk).not.toContain('abandon');
+    expect(disk).not.toContain(MNEMONIC);
     expect(disk).not.toContain(PASSWORD);
 
     const record = await readRecord(store);
@@ -144,8 +147,10 @@ describe('Vault (T1.5)', () => {
     expect(fromBase64(cached ?? '').length).toBe(32); // raw AES-256 key material
 
     const dump = session.dump();
+    // See the "NEVER writes the plaintext seed" test: 'abandon' is the canary; short words
+    // like 'art' collide with random base64 key material and flake.
     expect(dump).not.toContain('abandon'); // no seed word
-    expect(dump).not.toContain('art');
+    expect(dump).not.toContain(MNEMONIC);
     expect(dump).not.toContain(PASSWORD); // no password
   });
 
