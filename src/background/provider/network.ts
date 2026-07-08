@@ -46,8 +46,24 @@ export interface FetchOpts {
 }
 
 /**
+ * Strip credentials, query and hash from a URL before it can appear in an error message: a custom
+ * provider URL may carry `user:password@` or `?token=…` secrets, and provider errors can travel to
+ * untrusted surfaces (a dApp sees submitTx failures).
+ */
+export function sanitizeUrlForError(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.protocol}//${u.host}${u.pathname}`;
+  } catch {
+    return '<invalid url>';
+  }
+}
+
+/**
  * fetch + JSON with an AbortController timeout. Returns null on 404 when `allow404` is set
  * (Blockfrost returns 404 for an address/tx it has never seen — a normal "empty" case, not an error).
+ * Error messages carry only the SANITIZED URL + status + a bounded body excerpt — enough for local
+ * troubleshooting, no credentials. dApp-facing paths must still map these to generic strings.
  */
 export async function fetchJson<T>(url: string, opts: FetchOpts = {}): Promise<T | null> {
   const { timeoutMs = DEFAULT_TIMEOUT_MS, headers, method = 'GET', body, allow404 = false } = opts;
@@ -58,7 +74,7 @@ export async function fetchJson<T>(url: string, opts: FetchOpts = {}): Promise<T
     res = await fetch(url, { method, headers: headers ?? {}, body: body ?? null, signal: controller.signal });
   } catch (e) {
     if (e instanceof DOMException && e.name === 'AbortError') {
-      throw new ProviderTimeoutError(`request to ${url} timed out after ${timeoutMs}ms`);
+      throw new ProviderTimeoutError(`request to ${sanitizeUrlForError(url)} timed out after ${timeoutMs}ms`);
     }
     throw e;
   } finally {
@@ -68,7 +84,7 @@ export async function fetchJson<T>(url: string, opts: FetchOpts = {}): Promise<T
   if (res.status === 404 && allow404) return null;
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
-    throw new ProviderHttpError(res.status, `HTTP ${res.status} for ${url}: ${detail.slice(0, 200)}`);
+    throw new ProviderHttpError(res.status, `HTTP ${res.status} for ${sanitizeUrlForError(url)}: ${detail.slice(0, 200)}`);
   }
   return (await res.json()) as T;
 }

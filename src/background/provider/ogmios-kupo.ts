@@ -146,6 +146,10 @@ export class OgmiosKupoProvider implements IChainProvider {
   getTip(): Promise<ChainTip> {
     return this.ogmios.getTip();
   }
+  /** CIP-95 stake-key registration → the node's ledger state via Ogmios (Kupo has no reward accounts). */
+  getStakeRegistration(stakeAddress: string): Promise<boolean> {
+    return this.ogmios.getStakeRegistration(stakeAddress);
+  }
 
   close(): void {
     this.ogmios.close();

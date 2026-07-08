@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
     isUsed: vi.fn(async () => false),
     submitTx: vi.fn(async () => 'txhash123'),
     resolveUtxos: vi.fn(async () => []),
+    getStakeRegistration: vi.fn(async () => false),
     getProtocolParameters: vi.fn(async () => ({})),
     getGenesisInfos: vi.fn(async () => ({})),
     getAssetAddresses: vi.fn(async () => [] as Array<{ address: string; quantity: string }>),
@@ -50,11 +51,24 @@ vi.mock('../src/background/dapp/allowlist', () => ({
 vi.mock('../src/background/dapp/approvals', () => ({ requestApproval: async () => h.state.approve }));
 
 import { handleCip30 } from '../src/background/cip30/handlers';
-import { UTxO, Value, Address, defaultProtocolParameters, defaultPreviewGenesisInfos } from '@harmoniclabs/buildooor';
+import {
+  UTxO,
+  Value,
+  Address,
+  Tx,
+  TxBody,
+  TxOut,
+  TxWitnessSet,
+  defaultProtocolParameters,
+  defaultPreviewGenesisInfos,
+} from '@harmoniclabs/buildooor';
 import { buildSend } from '../src/core/tx/build';
 import { mnemonicToRoot } from '../src/core/keys';
-import { baseAddress } from '../src/core/address';
+import { baseAddress, accountKeys, drepPublicKey, keyHash28, rewardAddress, stakePublicKey } from '../src/core/address';
+import { verifyCoseSign1 } from '../src/core/cose/verify';
 import { toHex, utf8ToBytes } from '../src/core/crypto/encoding';
+import { ProviderHttpError, ProviderTimeoutError } from '../src/background/provider/IChainProvider';
+import type { Cip30Error } from '../src/shared/errors';
 
 const ORIGIN = 'https://dapp.example';
 const RECIPIENT =
@@ -80,6 +94,8 @@ beforeEach(() => {
   h.provider.submitTx.mockClear();
   h.provider.getAssetAddresses.mockClear();
   h.provider.getAssetAddresses.mockResolvedValue([]);
+  h.provider.getStakeRegistration.mockClear();
+  h.provider.getStakeRegistration.mockResolvedValue(false);
 });
 
 describe('handleCip30 — enable & gating (T4.1)', () => {
@@ -187,6 +203,22 @@ describe('handleCip30 — read methods (T4.2)', () => {
     expect(h.provider.submitTx).toHaveBeenCalledWith('deadbeef');
   });
 
+  it('submitTx provider failure → GENERIC dApp-facing error, never the raw provider message', async () => {
+    h.provider.submitTx.mockRejectedValueOnce(
+      new ProviderHttpError(500, 'HTTP 500 for https://user:secret@example.com/api?token=abc: upstream body'),
+    );
+    const err = (await handleCip30('submitTx', ['deadbeef'], ORIGIN).catch((e: unknown) => e)) as Cip30Error;
+    expect(err).toMatchObject({ code: 2, info: 'provider rejected transaction' });
+
+    h.provider.submitTx.mockRejectedValueOnce(new ProviderTimeoutError('request to https://x/api timed out'));
+    const err2 = (await handleCip30('submitTx', ['deadbeef'], ORIGIN).catch((e: unknown) => e)) as Cip30Error;
+    expect(err2).toMatchObject({ code: 2, info: 'provider timed out' });
+
+    h.provider.submitTx.mockRejectedValueOnce(new Error('anything else with http://user:pw@host details'));
+    const err3 = (await handleCip30('submitTx', ['deadbeef'], ORIGIN).catch((e: unknown) => e)) as Cip30Error;
+    expect(err3).toMatchObject({ code: 2, info: 'submit failed' });
+  });
+
   it('signTx: per-call consent — declined → TxSignError UserDeclined (2)', async () => {
     h.state.approve = false;
     await expect(handleCip30('signTx', [aTxCbor(), false], ORIGIN)).rejects.toMatchObject({ code: 2 });
@@ -199,16 +231,192 @@ describe('handleCip30 — read methods (T4.2)', () => {
     ).rejects.toMatchObject({ code: 2 });
   });
 
+  it('signData accepts the same owned address as bech32 and as hex (bech32-or-hex rule)', async () => {
+    const payload = toHex(utf8ToBytes('hello'));
+    const viaBech32 = (await handleCip30('signData', [ownAddr, payload], ORIGIN)) as { signature: string; key: string };
+    const viaHex = (await handleCip30('signData', [toHex(Address.fromString(ownAddr).toBuffer()), payload], ORIGIN)) as { signature: string; key: string };
+    // Ed25519 is deterministic: identical key + payload + address header ⇒ identical COSE output.
+    expect(viaBech32.signature).toBe(viaHex.signature);
+    expect(viaBech32.key).toBe(viaHex.key);
+  });
+
+  it('signData: malformed payload hex → InvalidRequest (-1), never coerced and signed', async () => {
+    await expect(handleCip30('signData', [ownAddr, 'zz'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    await expect(handleCip30('signData', [ownAddr, 'abc'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('signData: malformed address input → InvalidRequest (-1)', async () => {
+    await expect(handleCip30('signData', ['not-an-address', '00'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    await expect(handleCip30('signData', [42 as unknown as string, '00'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
   it('cip95.getPubDRepKey returns a 32-byte hex DRep key', async () => {
     const hex = (await handleCip30('cip95.getPubDRepKey', [], ORIGIN)) as string;
     expect(hex).toMatch(/^[0-9a-f]{64}$/); // 32 bytes
   });
 
-  it('cip95.get{Un}registeredPubStakeKeys: stake key reported unregistered for a fresh wallet', async () => {
+  it('cip95.get{Un}registeredPubStakeKeys: unregistered stake key reported via the UNregistered call', async () => {
     expect(await handleCip30('cip95.getRegisteredPubStakeKeys', [], ORIGIN)).toEqual([]);
     const unreg = (await handleCip30('cip95.getUnregisteredPubStakeKeys', [], ORIGIN)) as string[];
     expect(unreg).toHaveLength(1);
     expect(unreg[0]).toMatch(/^[0-9a-f]{64}$/);
+    // The provider was asked about the wallet's bech32 reward address.
+    const keys = accountKeys(mnemonicToRoot('abandon '.repeat(23) + 'art'), 0);
+    expect(h.provider.getStakeRegistration).toHaveBeenCalledWith(rewardAddress(keys, 'testnet').toString());
+  });
+
+  it('cip95.get{Un}registeredPubStakeKeys: REGISTERED stake key moves to the registered call (T6.1)', async () => {
+    h.provider.getStakeRegistration.mockResolvedValue(true);
+    const reg = (await handleCip30('cip95.getRegisteredPubStakeKeys', [], ORIGIN)) as string[];
+    expect(reg).toHaveLength(1);
+    expect(reg[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(await handleCip30('cip95.getUnregisteredPubStakeKeys', [], ORIGIN)).toEqual([]);
+  });
+
+  it('cip95.get{Un}registeredPubStakeKeys: provider failure degrades to unregistered, never throws', async () => {
+    h.provider.getStakeRegistration.mockRejectedValue(new Error('node down'));
+    expect(await handleCip30('cip95.getRegisteredPubStakeKeys', [], ORIGIN)).toEqual([]);
+    expect((await handleCip30('cip95.getUnregisteredPubStakeKeys', [], ORIGIN)) as string[]).toHaveLength(1);
+  });
+});
+
+describe('handleCip30 — cip95.signData (T6.1, DRep/stake-key COSE)', () => {
+  const root = mnemonicToRoot('abandon '.repeat(23) + 'art');
+  const keys = accountKeys(root, 0);
+  const drepIdHex = toHex(keyHash28(drepPublicKey(keys)));
+  const stakeAddrBech32 = rewardAddress(keys, 'testnet').toString();
+  const payload = toHex(utf8ToBytes('DRep vote authorisation'));
+
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+    h.state.ext.set(ORIGIN, [95]);
+  });
+
+  it("signs with the DRep key for the wallet's own DRep ID (hex, with and without 0x)", async () => {
+    const out = (await handleCip30('cip95.signData', [drepIdHex, payload], ORIGIN)) as { signature: string; key: string };
+    // COSE verifies AND the COSE_Key carries the DRep public key (not a payment/stake key).
+    const v = verifyCoseSign1(out.signature, out.key);
+    expect(v.valid).toBe(true);
+    expect(v.payloadUtf8).toBe('DRep vote authorisation');
+    expect(out.key).toContain(toHex(drepPublicKey(keys)));
+    const viaPrefixed = (await handleCip30('cip95.signData', [`0x${drepIdHex}`, payload], ORIGIN)) as { signature: string };
+    expect(viaPrefixed.signature).toBe(out.signature); // deterministic Ed25519, same input
+  });
+
+  it("signs with the STAKE key for the wallet's own reward address (bech32 and hex form)", async () => {
+    const out = (await handleCip30('cip95.signData', [stakeAddrBech32, payload], ORIGIN)) as { signature: string; key: string };
+    expect(verifyCoseSign1(out.signature, out.key).valid).toBe(true);
+    expect(out.key).toContain(toHex(stakePublicKey(keys)));
+    const hexForm = toHex(rewardAddress(keys, 'testnet').toBuffer());
+    const out2 = (await handleCip30('cip95.signData', [hexForm, payload], ORIGIN)) as { signature: string };
+    expect(out2.signature).toBe(out.signature);
+  });
+
+  it("a foreign DRep ID → ProofGeneration (1) — wallet doesn't hold that key", async () => {
+    await expect(handleCip30('cip95.signData', ['ff'.repeat(28), payload], ORIGIN)).rejects.toMatchObject({ code: 1 });
+  });
+
+  it('a foreign stake address → ProofGeneration (1); a script reward address → AddressNotPK (2)', async () => {
+    const foreignStakeHex = 'e1' + 'ab'.repeat(28);
+    await expect(handleCip30('cip95.signData', [foreignStakeHex, payload], ORIGIN)).rejects.toMatchObject({ code: 1 });
+    const scriptStakeHex = 'f1' + 'ab'.repeat(28);
+    await expect(handleCip30('cip95.signData', [scriptStakeHex, payload], ORIGIN)).rejects.toMatchObject({ code: 2 });
+  });
+
+  it('malformed payload or input → InvalidRequest (-1)', async () => {
+    await expect(handleCip30('cip95.signData', [drepIdHex, 'zz'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    await expect(handleCip30('cip95.signData', [42 as unknown as string, payload], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('user decline → DataSignError UserDeclined (3)', async () => {
+    h.state.approve = false;
+    await expect(handleCip30('cip95.signData', [drepIdHex, payload], ORIGIN)).rejects.toMatchObject({ code: 3 });
+  });
+
+  it('a payment address falls through to the plain CIP-30 signData semantics', async () => {
+    const out = (await handleCip30('cip95.signData', [ownAddr, payload], ORIGIN)) as { signature: string; key: string };
+    expect(verifyCoseSign1(out.signature, out.key).valid).toBe(true);
+    // and a foreign payment address still maps to AddressNotPK (2)
+    await expect(handleCip30('cip95.signData', [RECIPIENT, payload], ORIGIN)).rejects.toMatchObject({ code: 2 });
+  });
+
+  it('raw-postMessage cip95.signData WITHOUT negotiation is still blocked (InvalidRequest -1)', async () => {
+    h.state.ext.set(ORIGIN, []); // enabled origin, but cip95 not negotiated
+    await expect(handleCip30('cip95.signData', [drepIdHex, payload], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+});
+
+describe('handleCip30 — signTx collateral & required-signer witnessing', () => {
+  const root = mnemonicToRoot('abandon '.repeat(23) + 'art');
+  const ownPaymentKeyHash = Address.fromString(ownAddr).paymentCreds.hash.toString();
+  const ownStakeKeyHash = toHex(accountKeys(root, 0).stakeKeyHash);
+
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+    h.provider.resolveUtxos.mockClear();
+  });
+
+  function rawTxHex(body: Omit<ConstructorParameters<typeof TxBody>[0], 'outputs'>): string {
+    const outputs = [new TxOut({ address: Address.fromString(RECIPIENT), value: Value.lovelaces(9_800_000n) })];
+    return toHex(new Tx({ body: new TxBody({ ...body, outputs }), witnesses: new TxWitnessSet({}) }).toCborBytes());
+  }
+
+  const foreignSpend = () =>
+    new UTxO({ utxoRef: { id: 'aa'.repeat(32), index: 0 }, resolved: { address: RECIPIENT, value: Value.lovelaces(10_000_000n) } });
+
+  it('a wallet-owned collateral input yields the payment witness even with no wallet spending input', async () => {
+    const spend = foreignSpend();
+    const coll = new UTxO({ utxoRef: { id: 'bb'.repeat(32), index: 0 }, resolved: { address: ownAddr, value: Value.lovelaces(5_000_000n) } });
+    h.provider.resolveUtxos.mockResolvedValueOnce([spend, coll]);
+    const witHex = (await handleCip30(
+      'signTx',
+      [rawTxHex({ inputs: [spend], outputs: [], fee: 200_000n, collateralInputs: [coll] }), false],
+      ORIGIN,
+    )) as string;
+    const wits = TxWitnessSet.fromCbor(witHex);
+    expect(wits.vkeyWitnesses).toHaveLength(1);
+    expect(wits.vkeyWitnesses?.[0]?.vkey.hash.toString()).toBe(ownPaymentKeyHash);
+    // the collateral ref must be resolved too (it feeds the approval display + witness selection)
+    expect(h.provider.resolveUtxos.mock.calls.at(-1)?.[0]).toHaveLength(2);
+  });
+
+  it('a tx whose ONLY wallet link is a requiredSigner payment-key hash still gets a witness', async () => {
+    const spend = foreignSpend();
+    h.provider.resolveUtxos.mockResolvedValueOnce([spend]);
+    const witHex = (await handleCip30(
+      'signTx',
+      [rawTxHex({ inputs: [spend], outputs: [], fee: 200_000n, requiredSigners: [ownPaymentKeyHash] }), false],
+      ORIGIN,
+    )) as string;
+    const wits = TxWitnessSet.fromCbor(witHex);
+    expect(wits.vkeyWitnesses).toHaveLength(1);
+    expect(wits.vkeyWitnesses?.[0]?.vkey.hash.toString()).toBe(ownPaymentKeyHash);
+  });
+
+  it('a wallet-owned STAKE-key requiredSigner is witnessed with the stake key', async () => {
+    const spend = foreignSpend();
+    h.provider.resolveUtxos.mockResolvedValueOnce([spend]);
+    const witHex = (await handleCip30(
+      'signTx',
+      [rawTxHex({ inputs: [spend], outputs: [], fee: 200_000n, requiredSigners: [ownStakeKeyHash] }), false],
+      ORIGIN,
+    )) as string;
+    const wits = TxWitnessSet.fromCbor(witHex);
+    expect(wits.vkeyWitnesses).toHaveLength(1);
+    expect(wits.vkeyWitnesses?.[0]?.vkey.hash.toString()).toBe(ownStakeKeyHash);
+  });
+
+  it('foreign inputs, foreign collateral and a foreign requiredSigner → ProofGeneration (1), no witness', async () => {
+    const spend = foreignSpend();
+    const coll = new UTxO({ utxoRef: { id: 'bb'.repeat(32), index: 1 }, resolved: { address: RECIPIENT, value: Value.lovelaces(5_000_000n) } });
+    h.provider.resolveUtxos.mockResolvedValueOnce([spend, coll]);
+    await expect(
+      handleCip30(
+        'signTx',
+        [rawTxHex({ inputs: [spend], outputs: [], fee: 200_000n, collateralInputs: [coll], requiredSigners: ['ff'.repeat(28)] }), false],
+        ORIGIN,
+      ),
+    ).rejects.toMatchObject({ code: 1 });
   });
 });
 

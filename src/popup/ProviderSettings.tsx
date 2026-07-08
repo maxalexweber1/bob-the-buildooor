@@ -7,6 +7,7 @@ import type { WalletSettings } from '../shared/internal';
 import type { Network } from '../background/provider/IChainProvider';
 import type { HistoryBackend, ProviderKind } from '../background/provider/index';
 import { ProviderBadge, card } from './ui';
+import { ensureHostPermission } from '../shared/providerPermissions';
 
 const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
 const PROVIDERS: ProviderKind[] = ['blockfrost', 'koios', 'ogmios'];
@@ -29,32 +30,19 @@ export function ProviderSettings() {
   const bfKey = s.blockfrostProjectIds?.[s.network] ?? '';
   const setBfKey = (v: string) => patch({ blockfrostProjectIds: { ...s.blockfrostProjectIds, [s.network]: v } });
 
-  // A custom/self-hosted Koios host isn't in the static manifest host_permissions, so the SW fetch
-  // would be CORS-blocked. Request that host at runtime (this Save click is the required user gesture)
-  // before saving. Public koios.rest / blockfrost.io are already granted statically.
-  async function ensureHostPermission(url: string | undefined): Promise<void> {
-    if (!url?.trim()) return;
-    let pattern: string;
-    try {
-      const u = new URL(url.trim());
-      pattern = `${u.protocol}//${u.hostname}/*`; // no port in match patterns → host-wide
-    } catch {
-      return;
-    }
-    try {
-      await chrome.permissions.request({ origins: [pattern] });
-    } catch {
-      /* denied or invalid pattern — the test below will surface the resulting failure */
-    }
-  }
-
   async function save(testAfter = false) {
     if (!s) return;
-    // Request first so the click's user gesture is still active for chrome.permissions.request.
-    if (s.providerKind === 'koios') await ensureHostPermission(s.koiosUrl);
-    // Kupo is a custom http(s) host (e.g. http://localhost:1442) not in the static manifest — the SW
-    // fetch needs its host permission. Covered by optional_host_permissions http(s)://*/*.
-    if (s.providerKind === 'ogmios') await ensureHostPermission(s.kupoUrl);
+    // Custom provider hosts (self-hosted Koios / Kupo) need a runtime host permission before the SW
+    // can fetch them — request FIRST, while this click's user gesture is still active, and treat a
+    // denial as a visible failure, not a silent save (shared helper).
+    if ((s.providerKind === 'koios' || s.historyBackend === 'koios') && !(await ensureHostPermission(s.koiosUrl))) {
+      setStatus('Permission for the custom Koios host was denied — it cannot be used.');
+      return;
+    }
+    if (s.providerKind === 'ogmios' && !(await ensureHostPermission(s.kupoUrl))) {
+      setStatus('Permission for the Kupo host was denied — it cannot be used.');
+      return;
+    }
     setBusy(true);
     setStatus(testAfter ? 'Testing…' : null);
     try {

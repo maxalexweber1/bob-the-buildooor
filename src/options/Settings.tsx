@@ -6,6 +6,7 @@ import { wallet } from '../shared/walletClient';
 import type { WalletSettings } from '../shared/internal';
 import type { Network } from '../background/provider/IChainProvider';
 import type { HistoryBackend, ProviderKind } from '../background/provider/index';
+import { ensureHostPermission } from '../shared/providerPermissions';
 
 const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
 const PROVIDERS: ProviderKind[] = ['blockfrost', 'koios', 'ogmios'];
@@ -29,7 +30,25 @@ export function Settings() {
   const setBfKey = (v: string) =>
     patch({ blockfrostProjectIds: { ...s.blockfrostProjectIds, [s.network]: v } });
 
+  // Custom provider hosts (self-hosted Koios / Kupo) need a runtime host permission before the SW
+  // can fetch them. Request FIRST, while the click's user gesture is still active, and surface a
+  // denial as a visible error instead of a silent save-then-fail (shared helper; same behavior as
+  // the popup's ProviderSettings so both settings surfaces act identically).
+  async function grantCustomHosts(): Promise<boolean> {
+    if (!s) return false;
+    if ((s.providerKind === 'koios' || s.historyBackend === 'koios') && !(await ensureHostPermission(s.koiosUrl))) {
+      setStatus('Permission for the custom Koios host was denied — it cannot be used.');
+      return false;
+    }
+    if (s.providerKind === 'ogmios' && !(await ensureHostPermission(s.kupoUrl))) {
+      setStatus('Permission for the Kupo host was denied — it cannot be used.');
+      return false;
+    }
+    return true;
+  }
+
   async function save() {
+    if (!(await grantCustomHosts())) return;
     setBusy(true);
     setStatus(null);
     try {
@@ -43,6 +62,7 @@ export function Settings() {
   }
 
   async function test() {
+    if (!(await grantCustomHosts())) return;
     setBusy(true);
     setStatus('Testing…');
     try {
@@ -87,9 +107,14 @@ export function Settings() {
       )}
 
       {s.providerKind === 'koios' && (
-        <Label text="Koios bearer token (optional)">
-          <input type="password" value={s.koiosApiKey ?? ''} autoComplete="off" onChange={(e) => patch({ koiosApiKey: e.target.value })} style={input} />
-        </Label>
+        <>
+          <Label text="Koios URL (optional — self-hosted; blank = public)">
+            <input type="text" value={s.koiosUrl ?? ''} autoComplete="off" placeholder="https://preview.koios.rest/api/v1" onChange={(e) => patch({ koiosUrl: e.target.value })} style={input} />
+          </Label>
+          <Label text="Koios bearer token (optional)">
+            <input type="password" value={s.koiosApiKey ?? ''} autoComplete="off" onChange={(e) => patch({ koiosApiKey: e.target.value })} style={input} />
+          </Label>
+        </>
       )}
 
       {s.providerKind === 'ogmios' && (

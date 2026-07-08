@@ -26,6 +26,19 @@ describe('CIP-30 extension registry (T4.7)', () => {
     expect(placement.signData).toBe('namespaced');
   });
 
+  it('CIP-95: every registered method is implemented', () => {
+    // The registry must only ever advertise methods the background can actually serve — a dApp that
+    // negotiates CIP-95 must never hit a not-implemented method at runtime.
+    const cip95 = EXTENSION_REGISTRY.find((e) => e.cip === 95);
+    if (!cip95) throw new Error('CIP-95 missing from registry');
+    expect(cip95.methods.map((m) => m.name).sort()).toEqual([
+      'getPubDRepKey',
+      'getRegisteredPubStakeKeys',
+      'getUnregisteredPubStakeKeys',
+      'signData',
+    ]);
+  });
+
   it('extensionWireKey is always cip{N}.{method} regardless of placement', () => {
     expect(extensionWireKey('cip95', 'getRegisteredPubStakeKeys')).toBe('cip95.getRegisteredPubStakeKeys');
   });

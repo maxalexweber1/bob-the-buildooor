@@ -8,6 +8,7 @@ import type { PendingApproval, TxSummary } from '../shared/internal';
 import { primaryButton } from './App';
 import { formatAda } from './Send';
 import { cip67LabelName } from '../core/cip67';
+import { fromHex } from '../core/crypto/encoding';
 
 export function Connect() {
   const [pending, setPending] = useState<PendingApproval | null | undefined>(undefined);
@@ -94,8 +95,63 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
       {summary.unresolvedInputs > 0 && (
         <p style={{ ...hint, color: '#c05621' }}>⚠ {summary.unresolvedInputs} input(s) could not be resolved for display.</p>
       )}
+      <CollateralRows summary={summary} />
+      <ReferenceInputRows refs={summary.referenceInputs} />
       <NodeEvalRows nodeEval={summary.nodeEval} />
       <TxFlagsWarning flags={summary.flags} />
+    </div>
+  );
+}
+
+/**
+ * Collateral at risk — forfeited if the tx's Plutus scripts fail phase-2 validation on-chain. Never
+ * approvable invisibly (CLAUDE.md §1.5): every collateral input is shown
+ * with its value and whether it is the user's own money.
+ */
+function CollateralRows({ summary }: { summary: TxSummary }) {
+  const { collateralInputs, unresolvedCollateralInputs, collateralReturn, totalCollateral } = summary;
+  if (collateralInputs.length === 0 && unresolvedCollateralInputs === 0 && totalCollateral === undefined) {
+    return null;
+  }
+  return (
+    <div style={{ marginTop: 8, background: '#fffaf0', border: '1px solid #f6ad55', borderRadius: 6, padding: 8 }}>
+      <div style={{ ...lbl, color: '#7b341e' }}>⚠ Collateral — at risk if script validation fails</div>
+      {collateralInputs.map((c, i) => (
+        <div key={i}>
+          <code style={smallBox}>{c.address}</code>
+          <div style={row}>
+            <span>{c.isOwn ? 'Your funds' : 'Not your funds'}</span>
+            <span style={{ fontWeight: 700 }}>{formatAda(c.value.lovelace)} ₳</span>
+          </div>
+        </div>
+      ))}
+      {unresolvedCollateralInputs > 0 && (
+        <p style={{ ...hint, color: '#c05621' }}>
+          ⚠ {unresolvedCollateralInputs} collateral input(s) could not be resolved — the value at risk is unknown.
+        </p>
+      )}
+      {totalCollateral !== undefined && (
+        <div style={row}><span>Maximum forfeited on failure</span><span style={{ fontWeight: 700 }}>{formatAda(totalCollateral)} ₳</span></div>
+      )}
+      {collateralReturn && (
+        <div style={row}>
+          <span>Returned on failure ({collateralReturn.isOwn ? 'to you' : 'NOT to you'})</span>
+          <span>{formatAda(collateralReturn.value.lovelace)} ₳</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Reference inputs (CIP-31) are read-only — the tx reads them but does NOT spend them. */
+function ReferenceInputRows({ refs }: { refs: TxSummary['referenceInputs'] }) {
+  if (refs.length === 0) return null;
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={lbl}>References {refs.length} input(s) (read-only, not spent)</div>
+      {refs.map((r) => (
+        <code key={r} style={smallBox}>{r}</code>
+      ))}
     </div>
   );
 }
@@ -248,12 +304,21 @@ function TxFlagsWarning({ flags }: { flags: TxSummary['flags'] }) {
   );
 }
 
-function SignDataBody({ payload }: { payload: { address: string; payloadHex: string } }) {
+function SignDataBody({ payload }: { payload: { address: string; payloadHex: string; signerKind?: 'payment' | 'stake' | 'drep' } }) {
   const text = decodeHexText(payload.payloadHex);
+  const governance = payload.signerKind === 'drep' || payload.signerKind === 'stake';
   return (
     <div>
+      {governance && (
+        <p style={{ ...hint, color: '#553c9a', background: '#faf5ff', border: '1px solid #d6bcfa', borderRadius: 6, padding: 8 }}>
+          🗳 <b>Governance signing (CIP-95).</b> This signs with your{' '}
+          {payload.signerKind === 'drep' ? 'DRep key' : 'stake key'} — not a payment address. Governance
+          dApps request this for DRep registration, updates or vote authorization. Only approve if you
+          initiated a governance action on this site.
+        </p>
+      )}
       <p style={hint}>This site asks you to sign a message with your key:</p>
-      <div style={lbl}>Signing address</div>
+      <div style={lbl}>{payload.signerKind === 'drep' ? 'DRep ID' : 'Signing address'}</div>
       <code style={smallBox}>{payload.address}</code>
       <div style={lbl}>Message</div>
       <code style={smallBox}>{text ?? `0x${payload.payloadHex}`}</code>
@@ -274,11 +339,11 @@ function approvalReqIdFromHash(): string {
   return new URLSearchParams(query).get('req') ?? '';
 }
 
-/** Decode hex → UTF-8 only if printable; otherwise show hex. Pure, no deps. */
+/** Decode hex → UTF-8 only if printable; otherwise show hex. Uses the STRICT fromHex so the popup
+ *  never renders a "decoded" text that differs from the bytes the wallet will sign. */
 function decodeHexText(hex: string): string | null {
   try {
-    const bytes = new Uint8Array((hex.match(/.{2}/g) ?? []).map((b) => parseInt(b, 16)));
-    const s = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    const s = new TextDecoder('utf-8', { fatal: true }).decode(fromHex(hex));
     return /^[\x20-\x7e\s]+$/.test(s) && s.length > 0 ? s : null;
   } catch {
     return null;

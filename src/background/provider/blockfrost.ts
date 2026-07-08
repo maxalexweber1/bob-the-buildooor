@@ -172,6 +172,12 @@ export class BlockfrostProvider implements IChainProvider {
     return (await this.get<{ hash: string }>(`/txs/${txHash}`, true)) !== null;
   }
 
+  /** CIP-95 stake-key registration state: /accounts/{stake} `active` (deregistration clears it). 404 → never seen → false. */
+  async getStakeRegistration(stakeAddress: string): Promise<boolean> {
+    const a = await this.get<{ active: boolean }>(`/accounts/${stakeAddress}`, true);
+    return a?.active === true;
+  }
+
   /** Display metadata for an asset (CIP-25 on-chain, falling back to the off-chain registry). 404 → null. */
   async getAssetMetadata(unit: string): Promise<AssetMetadata | null> {
     const a = await this.get<BfAsset>(`/assets/${unit}`, true);

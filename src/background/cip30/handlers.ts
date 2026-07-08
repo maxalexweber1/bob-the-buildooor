@@ -4,7 +4,7 @@
 //   - every other method requires an enabled origin AND an unlocked wallet.
 //   - all returns are hex (address bytes / cbor) per the CIP-30 spec.
 //   - signTx (witness-set only) and signData (CIP-8 COSE) are per-call approval-gated (T4.3/T4.5).
-import { Address, Tx, Value, type UTxO, type XPrv } from '@harmoniclabs/buildooor';
+import { Address, StakeAddress, Tx, Value, type UTxO, type XPrv } from '@harmoniclabs/buildooor';
 import { allowlist } from '../dapp/allowlist';
 import { requestApproval } from '../dapp/approvals';
 import {
@@ -27,11 +27,13 @@ import { touchAutoLock } from '../autolock';
 import { mnemonicToRoot, deriveKey, Role } from '../../core/keys';
 import {
   accountKeys,
+  addressFromCip30Input,
   baseAddressFrom,
   bech32Network,
   rewardAddress,
   drepPublicKey,
   stakePublicKey,
+  keyHash28,
   type AccountKeys,
 } from '../../core/address';
 import { summarizeTx } from '../../core/tx/summary';
@@ -40,6 +42,7 @@ import { valueView } from '../../core/balance';
 import { buildCoseSign1 } from '../../core/cose/sign';
 import { signTxWitnessSet } from '../signer';
 import type { IChainProvider } from '../provider/index';
+import { ProviderHttpError, ProviderTimeoutError } from '../provider/IChainProvider';
 import { discoverChain, nextReceiveIndex } from '../discovery';
 import { toHex, fromHex } from '../../core/crypto/encoding';
 import { resolveHandle, HandleError } from '../../core/handle';
@@ -187,13 +190,11 @@ async function authedMethod(method: string, params: unknown[], origin: string): 
     case 'cip95.getPubDRepKey':
       return toHex(drepPublicKey(keys));
     case 'cip95.getRegisteredPubStakeKeys':
-      // TODO(M6): query on-chain stake registration. Until then, none reported as registered.
-      return [];
+      return (await stakeKeyRegistered(provider, keys, s)) ? [toHex(stakePublicKey(keys))] : [];
     case 'cip95.getUnregisteredPubStakeKeys':
-      return [toHex(stakePublicKey(keys))];
+      return (await stakeKeyRegistered(provider, keys, s)) ? [] : [toHex(stakePublicKey(keys))];
     case 'cip95.signData':
-      // TODO(M6): COSE-sign with the DRep key for a DRep credential / vote auth.
-      throw apiError(APIErrorCode.InternalError, 'cip95.signData not yet implemented');
+      return signDataCip95(root, s, provider, keys, origin, params[0] as string, params[1] as string);
 
     default:
       throw apiError(APIErrorCode.InvalidRequest, `unknown method: ${method}`);
@@ -230,7 +231,11 @@ async function signTx(
   partialSign: boolean,
 ): Promise<string> {
   const tx = Tx.fromCbor(txCbor);
-  const resolved = await provider.resolveUtxos([...tx.body.inputs].map((i) => i.utxoRef));
+  // Resolve collateral inputs alongside spending inputs: they are value at risk that MUST show in the
+  // approval, and a wallet-owned collateral input needs this wallet's witness.
+  const resolved = await provider.resolveUtxos(
+    [...tx.body.inputs, ...(tx.body.collateralInputs ?? [])].map((i) => i.utxoRef),
+  );
   const owners = await ownerMap(root, s, provider, keys);
   const summary = summarizeTx(tx, resolved, new Set(owners.keys()));
 
@@ -244,11 +249,31 @@ async function signTx(
     throw new Cip30Error(TxSignErrorCode.UserDeclined, 'user declined signing');
   }
 
+  // `resolved` covers spending AND collateral inputs, so a wallet-owned collateral input contributes
+  // its payment key here even when no spending input is ours.
   const signerRefs = new Map<string, OwnerRef>();
   for (const u of resolved) {
     const o = owners.get(u.resolved.address.toString());
     if (o) signerRefs.set(`${o.role}/${o.index}`, o);
   }
+
+  // requiredSigners are bare key hashes (Plutus `extra_signatories` / multi-party flows): a tx may
+  // need this wallet's signature without spending any wallet-owned input. Match every hash against
+  // the key hashes this wallet controls — payment (per known address), stake, DRep.
+  const requiredSigners = tx.body.requiredSigners ?? [];
+  if (requiredSigners.length > 0) {
+    const byHash = new Map<string, OwnerRef>();
+    for (const [addr, o] of owners) {
+      byHash.set(Address.fromString(addr).paymentCreds.hash.toString().toLowerCase(), o);
+    }
+    byHash.set(toHex(keys.stakeKeyHash), { role: Role.Staking, index: 0 });
+    byHash.set(toHex(keyHash28(drepPublicKey(keys))), { role: Role.DRep, index: 0 });
+    for (const rs of requiredSigners) {
+      const o = byHash.get(rs.toString().toLowerCase());
+      if (o) signerRefs.set(`${o.role}/${o.index}`, o);
+    }
+  }
+
   if (signerRefs.size === 0 && !partialSign) {
     throw new Cip30Error(TxSignErrorCode.ProofGeneration, 'wallet owns none of the inputs');
   }
@@ -273,24 +298,146 @@ async function signData(
   provider: IChainProvider,
   keys: AccountKeys,
   origin: string,
-  addressHex: string,
+  addressInput: string,
   payloadHex: string,
 ): Promise<{ signature: string; key: string }> {
-  const address = Address.fromBytes(fromHex(addressHex));
+  // Trust-no-input: the address is accepted as bech32 OR hex (project rule); the payload
+  // is decoded with the STRICT fromHex so malformed hex is rejected, never silently coerced and
+  // signed as different bytes. Error mapping: malformed request input → APIError.InvalidRequest (-1);
+  // a well-formed address the wallet doesn't own a payment key for → DataSignError.AddressNotPK (2).
+  let address: Address;
+  let payload: Uint8Array;
+  try {
+    if (typeof addressInput !== 'string' || typeof payloadHex !== 'string') throw new Error('not a string');
+    address = addressFromCip30Input(addressInput);
+    payload = fromHex(payloadHex);
+  } catch {
+    throw invalidRequest('signData: malformed address or payload');
+  }
   const owner = (await ownerMap(root, s, provider, keys)).get(address.toString());
   if (!owner) throw new Cip30Error(DataSignErrorCode.AddressNotPK, 'address is not a key address owned by this wallet');
 
-  if (!(await requestApproval('signData', origin, { address: address.toString(), payloadHex }))) {
+  return approveThenCoseSign(
+    origin,
+    { address: address.toString(), payloadHex, signerKind: 'payment' },
+    address.toBuffer(),
+    deriveKey(root, 0, owner.role, owner.index),
+    payload,
+  );
+}
+
+/**
+ * CIP-95: is the wallet's (single-account) stake key registered on-chain? Unknown state — provider
+ * without the capability, or a provider hiccup — counts as UNREGISTERED, which is what the spec
+ * prescribes ("if the wallet does not know the registration status of its stake keys then it should
+ * return them as part of getUnregisteredPubStakeKeys"). Never fails the dApp call.
+ */
+async function stakeKeyRegistered(
+  provider: IChainProvider,
+  keys: AccountKeys,
+  s: WalletSettings,
+): Promise<boolean> {
+  if (!provider.getStakeRegistration) return false;
+  try {
+    return await provider.getStakeRegistration(rewardAddress(keys, bech32Network(s.network)).toString());
+  } catch {
+    return false;
+  }
+}
+
+/** Payload shown by the trusted signData approval prompt (Connect.tsx `SignDataBody`). */
+interface SignDataApprovalPayload {
+  address: string;
+  payloadHex: string;
+  /** Which wallet key signs — the UI shows explicit governance wording for 'stake'/'drep' (CIP-95). */
+  signerKind: 'payment' | 'stake' | 'drep';
+}
+
+/** Per-call consent, then CIP-8 COSE_Sign1 with the given key. Shared by CIP-30 and CIP-95 signData. */
+async function approveThenCoseSign(
+  origin: string,
+  approval: SignDataApprovalPayload,
+  addressHeaderBytes: Uint8Array,
+  signingKey: XPrv,
+  payload: Uint8Array,
+): Promise<{ signature: string; key: string }> {
+  if (!(await requestApproval('signData', origin, approval))) {
     throw new Cip30Error(DataSignErrorCode.UserDeclined, 'user declined');
   }
+  return buildCoseSign1(payload, addressHeaderBytes, signingKey.toPrivateKeyBytes(), signingKey.public().toPubKeyBytes());
+}
 
-  const signingKey = deriveKey(root, 0, owner.role, owner.index);
-  return buildCoseSign1(
-    fromHex(payloadHex),
-    address.toBuffer(),
-    signingKey.toPrivateKeyBytes(),
-    signingKey.public().toPubKeyBytes(),
-  );
+/**
+ * CIP-95 signData (T6.1): extends CIP-30 signData with governance credentials. Accepted first-arg
+ * forms per the spec:
+ *  - DRepID — 28-byte hex (blake2b-224 of the CIP-105 DRep public key `…/3/0`) → signs with the DRep key,
+ *    COSE address header = the raw 28 DRep-ID bytes;
+ *  - reward (stake) address — bech32 `stake…` or 29-byte hex (header 0xe0/0xe1) → signs with the stake key;
+ *  - payment address (CIP-19 types 0/2/4/6, bech32 or hex) → the plain CIP-30 signData path.
+ * The wallet does NOT require the DRep to be registered on-chain (the spec doesn't — this signing also
+ * serves the DRep-registration flow itself). Error mapping: malformed input → APIError.InvalidRequest;
+ * a governance credential we don't hold → DataSignError.ProofGeneration (spec: "wallet does not have
+ * the secret key"); script-credential reward address → DataSignError.AddressNotPK.
+ */
+async function signDataCip95(
+  root: XPrv,
+  s: WalletSettings,
+  provider: IChainProvider,
+  keys: AccountKeys,
+  origin: string,
+  input: string,
+  payloadHex: string,
+): Promise<{ signature: string; key: string }> {
+  let payload: Uint8Array;
+  try {
+    if (typeof input !== 'string' || typeof payloadHex !== 'string') throw new Error('not a string');
+    payload = fromHex(payloadHex);
+  } catch {
+    throw invalidRequest('cip95.signData: malformed payload');
+  }
+  const hexBody = (input.startsWith('0x') ? input.slice(2) : input).toLowerCase();
+
+  // DRep ID: exactly 28 bytes of hex (a bare key-hash — no address header byte).
+  if (/^[0-9a-f]{56}$/.test(hexBody)) {
+    if (hexBody !== toHex(keyHash28(drepPublicKey(keys)))) {
+      throw new Cip30Error(DataSignErrorCode.ProofGeneration, "DRep ID does not match this wallet's DRep key");
+    }
+    return approveThenCoseSign(
+      origin,
+      { address: hexBody, payloadHex, signerKind: 'drep' },
+      fromHex(hexBody),
+      deriveKey(root, 0, Role.DRep, 0),
+      payload,
+    );
+  }
+
+  // Reward (stake) address: bech32 `stake…`, or 29-byte hex. Script-credential reward addresses
+  // (header 0xf0/0xf1) have no signing key at all → AddressNotPK.
+  if (input.startsWith('stake') || /^[ef][01][0-9a-f]{56}$/.test(hexBody)) {
+    if (/^f[01]/.test(hexBody)) {
+      throw new Cip30Error(DataSignErrorCode.AddressNotPK, 'script-credential reward address has no signing key');
+    }
+    let stakeAddr: StakeAddress;
+    try {
+      stakeAddr = input.startsWith('stake') ? StakeAddress.fromString(input) : StakeAddress.fromBytes(fromHex(hexBody));
+    } catch {
+      throw invalidRequest('cip95.signData: malformed stake address');
+    }
+    const own = rewardAddress(keys, bech32Network(s.network));
+    if (stakeAddr.toString() !== own.toString()) {
+      throw new Cip30Error(DataSignErrorCode.ProofGeneration, 'stake address is not owned by this wallet');
+    }
+    return approveThenCoseSign(
+      origin,
+      { address: own.toString(), payloadHex, signerKind: 'stake' },
+      own.toBuffer(),
+      deriveKey(root, 0, Role.Staking, 0),
+      payload,
+    );
+  }
+
+  // Anything else is a payment address — identical semantics to plain CIP-30 signData.
+  return signData(root, s, provider, keys, origin, input, payloadHex);
 }
 
 /**
@@ -384,6 +531,11 @@ async function submit(provider: IChainProvider, txHex: string): Promise<string> 
   try {
     return await provider.submitTx(txHex);
   } catch (e) {
-    throw txSendFailure(e instanceof Error ? e.message : 'submit failed');
+    // dApp-facing error info is GENERIC on purpose: raw provider messages
+    // can reflect the configured endpoint URL or upstream response bodies to an untrusted page.
+    // Full (sanitized) diagnostics stay in the trusted wallet UI / console paths.
+    if (e instanceof ProviderTimeoutError) throw txSendFailure('provider timed out');
+    if (e instanceof ProviderHttpError) throw txSendFailure('provider rejected transaction');
+    throw txSendFailure('submit failed');
   }
 }

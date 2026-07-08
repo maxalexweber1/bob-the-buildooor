@@ -6,6 +6,11 @@ import { OgmiosProvider } from '../src/background/provider/ogmios';
 import { KupoClient, OgmiosKupoProvider, kupoValueToUnits } from '../src/background/provider/ogmios-kupo';
 import { createProvider } from '../src/background/provider/index';
 import { ogmiosValueToUnits, parseRatio } from '../src/background/provider/mappers';
+import { fetchJson, sanitizeUrlForError } from '../src/background/provider/network';
+import { ProviderHttpError } from '../src/background/provider/IChainProvider';
+import { accountKeys, rewardAddress } from '../src/core/address';
+import { mnemonicToRoot } from '../src/core/keys';
+import { toHex } from '../src/core/crypto/encoding';
 
 const ADDR =
   'addr_test1qqqt0pru382hy9vjlsxv3ye02z50sfvt8xunscg5pgden77z73dpdfng2ctw2ekqplqgrljelz7h4dneac27nn3qx3rqqpavzj';
@@ -62,6 +67,24 @@ describe('mappers', () => {
     });
     expect(units).toContainEqual({ unit: 'lovelace', quantity: '4250000' });
     expect(units).toContainEqual({ unit: ASSET, quantity: '7' });
+  });
+});
+
+describe('provider error sanitization', () => {
+  it('sanitizeUrlForError strips credentials, query and hash but keeps host+port+path', () => {
+    expect(sanitizeUrlForError('https://user:secret@example.com/api?token=abc#frag')).toBe('https://example.com/api');
+    expect(sanitizeUrlForError('http://localhost:1442/matches?q=1')).toBe('http://localhost:1442/matches');
+    expect(sanitizeUrlForError('not a url')).toBe('<invalid url>');
+  });
+
+  it('fetchJson HTTP errors never leak URL credentials or query tokens', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res('upstream refused', 500)));
+    const err = (await fetchJson('https://user:secret@example.com/api?token=abc').catch((e: unknown) => e)) as Error;
+    expect(err).toBeInstanceOf(ProviderHttpError);
+    expect(err.message).not.toContain('secret');
+    expect(err.message).not.toContain('token=abc');
+    expect(err.message).toContain('https://example.com/api');
+    expect(err.message).toContain('500');
   });
 });
 
@@ -243,6 +266,26 @@ describe('BlockfrostProvider (mocked fetch)', () => {
   });
 });
 
+describe('getStakeRegistration — Blockfrost & Koios (CIP-95 T6.1)', () => {
+  it('Blockfrost: active → true, deregistered → false, never-seen (404) → false', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res({ active: true })));
+    expect(await new BlockfrostProvider('preview', 'k').getStakeRegistration('stake_test1x')).toBe(true);
+    vi.stubGlobal('fetch', vi.fn(async () => res({ active: false })));
+    expect(await new BlockfrostProvider('preview', 'k').getStakeRegistration('stake_test1x')).toBe(false);
+    vi.stubGlobal('fetch', vi.fn(async () => res('Not Found', 404)));
+    expect(await new BlockfrostProvider('preview', 'k').getStakeRegistration('stake_test1x')).toBe(false);
+  });
+
+  it('Koios: status registered → true; not registered / empty → false', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => res([{ status: 'registered' }])));
+    expect(await new KoiosProvider('preview').getStakeRegistration('stake_test1x')).toBe(true);
+    vi.stubGlobal('fetch', vi.fn(async () => res([{ status: 'not registered' }])));
+    expect(await new KoiosProvider('preview').getStakeRegistration('stake_test1x')).toBe(false);
+    vi.stubGlobal('fetch', vi.fn(async () => res([])));
+    expect(await new KoiosProvider('preview').getStakeRegistration('stake_test1x')).toBe(false);
+  });
+});
+
 // ---- Ogmios over a fake WebSocket ----
 
 type Responder = (method: string, params: unknown) => unknown;
@@ -373,6 +416,27 @@ describe('OgmiosProvider (fake WebSocket JSON-RPC)', () => {
       m === 'queryLedgerState/tip' ? 'origin' : m === 'queryNetwork/blockHeight' ? 'origin' : null,
     );
     expect(await p2.getTip()).toEqual({ slot: 0, hash: '', height: 0 });
+  });
+
+  it('getStakeRegistration queries rewardAccountSummaries with the stake KEY HASH and maps entry-presence', async () => {
+    // CIP-95 T6.1: the Ogmios query takes stake credentials (key hashes), not bech32 reward addresses;
+    // a registered account comes back as an entry, an unregistered one is simply absent.
+    const keys = accountKeys(mnemonicToRoot('abandon '.repeat(23) + 'art'), 0);
+    const stakeAddr = rewardAddress(keys, 'testnet').toString();
+    const expectedHash = toHex(keys.stakeKeyHash);
+    let seenKeys: unknown;
+    const p = ogmiosProvider((method, params) => {
+      if (method === 'queryLedgerState/rewardAccountSummaries') {
+        seenKeys = (params as { keys: string[] }).keys;
+        return { [expectedHash]: { rewards: { ada: { lovelace: 0 } } } };
+      }
+      return null;
+    });
+    expect(await p.getStakeRegistration(stakeAddr)).toBe(true);
+    expect(seenKeys).toEqual([expectedHash]);
+
+    const unregistered = ogmiosProvider(() => ({}));
+    expect(await unregistered.getStakeRegistration(stakeAddr)).toBe(false);
   });
 
   it('rejects (not hangs) when the WebSocket never opens — connect timeout (review #5)', async () => {

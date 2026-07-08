@@ -27,6 +27,7 @@ export class CompositeProvider implements IChainProvider {
   readonly getAddressTransactions?: NonNullable<IChainProvider['getAddressTransactions']>;
   readonly getTxDetail?: NonNullable<IChainProvider['getTxDetail']>;
   readonly getUtxosForAddresses?: NonNullable<IChainProvider['getUtxosForAddresses']>;
+  readonly getStakeRegistration?: NonNullable<IChainProvider['getStakeRegistration']>;
 
   /**
    * Where address/UTxO reads (`getUtxos`/`isUsed`/`resolveUtxos`) go. Defaults to `primary`, but for
@@ -64,6 +65,9 @@ export class CompositeProvider implements IChainProvider {
     if (getAddressTransactions) this.getAddressTransactions = getAddressTransactions;
     const getTxDetail = primary.getTxDetail?.bind(primary) ?? secondary?.getTxDetail?.bind(secondary);
     if (getTxDetail) this.getTxDetail = getTxDetail;
+    const getStakeRegistration =
+      primary.getStakeRegistration?.bind(primary) ?? secondary?.getStakeRegistration?.bind(secondary);
+    if (getStakeRegistration) this.getStakeRegistration = getStakeRegistration;
     // Batched read follows the read provider, not the state primary.
     const getUtxosForAddresses = this.reads.getUtxosForAddresses?.bind(this.reads);
     if (getUtxosForAddresses) this.getUtxosForAddresses = getUtxosForAddresses;

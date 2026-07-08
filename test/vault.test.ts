@@ -10,7 +10,7 @@ import {
   type VaultRecord,
 } from '../src/background/vault';
 import type { KeyValueStore } from '../src/background/storage';
-import { fromBase64 } from '../src/core/crypto/encoding';
+import { fromBase64, toBase64 } from '../src/core/crypto/encoding';
 
 // In-memory stand-in for chrome.storage.local. Round-trips values through JSON to faithfully
 // simulate structured serialization (so a CryptoKey or any non-serializable secret would surface).
@@ -112,7 +112,12 @@ describe('Vault (T1.5)', () => {
   it('a tampered ciphertext is rejected as a wrong password (GCM integrity)', async () => {
     await vault.create(MNEMONIC, PASSWORD);
     const record = await readRecord(store);
-    const flipped = 'A' + record.blob.ciphertext.slice(1); // corrupt base64 head
+    // Flip one BYTE (not a base64 char: overwriting char 0 with 'A' is a no-op whenever the
+    // ciphertext already starts with 'A' — a ~1/64 flaky pass).
+    const bytes = fromBase64(record.blob.ciphertext);
+    bytes[0] = (bytes[0] ?? 0) ^ 0x01;
+    const flipped = toBase64(bytes);
+    expect(flipped).not.toBe(record.blob.ciphertext); // the tamper must actually change the blob
     await store.set(VAULT_STORAGE_KEY, {
       ...record,
       blob: { ...record.blob, ciphertext: flipped },

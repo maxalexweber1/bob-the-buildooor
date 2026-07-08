@@ -51,9 +51,15 @@ export function toHex(bytes: Uint8Array): string {
   return s;
 }
 
+/**
+ * STRICT hex decode. `parseInt` must never see this input: it coerces garbage ('zz' → NaN → 0x00),
+ * which for signing paths means signing DIFFERENT bytes than the caller sent instead of rejecting
+ * (CLAUDE.md §1.6 trust-no-input). Errors never echo the input (no secrets).
+ */
 export function fromHex(hex: string): Uint8Array {
   const clean = hex.startsWith('0x') ? hex.slice(2) : hex;
   if (clean.length % 2 !== 0) throw new Error('odd-length hex string');
+  if (!/^[0-9a-fA-F]*$/.test(clean)) throw new Error('invalid hex string');
   const out = new Uint8Array(clean.length / 2);
   for (let i = 0; i < out.length; i++) {
     out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);

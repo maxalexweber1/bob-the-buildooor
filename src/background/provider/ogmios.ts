@@ -6,7 +6,7 @@
 // for a local cardano-node+Ogmios today, and a future GerolamoProvider slots in behind IChainProvider
 // the same way (see IChainProvider.ts).
 import type { CanResolveToUTxO, GenesisInfos, ProtocolParameters, UTxO } from '@harmoniclabs/buildooor';
-import { forceTxOutRef } from '@harmoniclabs/buildooor';
+import { forceTxOutRef, StakeAddress } from '@harmoniclabs/buildooor';
 import {
   ProviderError,
   ProviderTimeoutError,
@@ -191,6 +191,20 @@ export class OgmiosProvider implements IChainProvider {
     return rows.map((u) =>
       toUtxo({ txHash: u.transaction.id, outputIndex: u.index, address: u.address, amount: ogmiosValueToUnits(u.value) }),
     );
+  }
+
+  /**
+   * CIP-95 stake-key registration state. `rewardAccountSummaries` returns an entry per REGISTERED
+   * reward account and simply omits unregistered ones, so "any entry back for our key" = registered.
+   * The query wants stake credentials (key hashes), not bech32 reward addresses — convert first.
+   */
+  async getStakeRegistration(stakeAddress: string): Promise<boolean> {
+    const keyHash = StakeAddress.fromString(stakeAddress).credentials.toString();
+    const rows = await this.client.request<Record<string, unknown> | null>(
+      'queryLedgerState/rewardAccountSummaries',
+      { keys: [keyHash] },
+    );
+    return rows !== null && typeof rows === 'object' && Object.keys(rows).length > 0;
   }
 
   async getProtocolParameters(): Promise<ProtocolParameters> {

@@ -60,6 +60,20 @@ export interface TxSummary {
   outputs: Array<TxIO & { isOwn: boolean }>;
   /** Inputs we couldn't resolve to a known UTxO (shown so nothing is hidden from the user). */
   unresolvedInputs: number;
+  /**
+   * Collateral inputs — forfeited if a Plutus script fails phase-2 validation. Wallet-owned ADA at
+   * risk MUST be visible in the approval (CLAUDE.md §1.5), so these are
+   * resolved and rendered as their own concept, never lumped in with spending inputs.
+   */
+  collateralInputs: Array<TxIO & { isOwn: boolean }>;
+  /** Collateral inputs we couldn't resolve (still surfaced — the value at risk is then unknown). */
+  unresolvedCollateralInputs: number;
+  /** Babbage collateral-return output: what comes back if collateral IS forfeited. */
+  collateralReturn?: TxIO & { isOwn: boolean };
+  /** Babbage total-collateral (lovelace actually forfeited on script failure), when declared. */
+  totalCollateral?: string;
+  /** Reference inputs (CIP-31) as `txHash#index` refs — read-only, NOT spent. */
+  referenceInputs: string[];
   fee: string;
   /** Decoded mint/burn — a negative quantity is a burn. Empty when the tx mints nothing. */
   mint: AssetBalance[];
@@ -116,6 +130,27 @@ export function summarizeTx(tx: Tx, resolvedInputs: UTxO[], ownAddresses: Readon
   });
 
   const b = tx.body;
+
+  // Collateral is resolved from the same byRef map — the caller resolves collateral refs alongside
+  // spending inputs (collateral must never be approvable invisibly).
+  const collateralInputs: Array<TxIO & { isOwn: boolean }> = [];
+  let unresolvedCollateralInputs = 0;
+  for (const inp of b.collateralInputs ?? []) {
+    const u = byRef.get(inp.utxoRef.toString());
+    if (u) {
+      const address = u.resolved.address.toString();
+      collateralInputs.push({ address, value: valueView(u.resolved.value), isOwn: ownAddresses.has(address) });
+    } else unresolvedCollateralInputs++;
+  }
+  const collateralReturn = b.collateralReturn
+    ? {
+        address: b.collateralReturn.address.toString(),
+        value: valueView(b.collateralReturn.value),
+        isOwn: ownAddresses.has(b.collateralReturn.address.toString()),
+      }
+    : undefined;
+  const totalCollateral = b.totCollateral !== undefined ? b.totCollateral.toString() : undefined;
+  const referenceInputs = [...(b.refInputs ?? [])].map((u) => u.utxoRef.toString());
   const metadataJson = tx.auxiliaryData?.metadata?.toJson();
   const message = decodeTxMessage(metadataJson);
   // Warn about auxiliary data only when something beyond the decoded CIP-20 memo is present: another
@@ -137,6 +172,11 @@ export function summarizeTx(tx: Tx, resolvedInputs: UTxO[], ownAddresses: Readon
     inputs,
     outputs,
     unresolvedInputs,
+    collateralInputs,
+    unresolvedCollateralInputs,
+    ...(collateralReturn ? { collateralReturn } : {}),
+    ...(totalCollateral !== undefined ? { totalCollateral } : {}),
+    referenceInputs,
     fee: b.fee.toString(),
     mint: decodeMint(b.mint),
     withdrawals: decodeWithdrawals(b.withdrawals),

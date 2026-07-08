@@ -109,6 +109,14 @@ export interface IChainProvider {
    */
   getAssetAddresses?(unit: string): Promise<{ address: string; quantity: string }[]>;
 
+  /**
+   * Is this reward (stake) address registered on-chain (stake-key registration certificate, not yet
+   * deregistered)? Drives CIP-95 `getRegisteredPubStakeKeys` / `getUnregisteredPubStakeKeys` (T6.1).
+   * `stakeAddress` is bech32 (`stake1…`/`stake_test1…`). Omitted → callers report keys as
+   * unregistered, which CIP-95 prescribes for unknown registration state.
+   */
+  getStakeRegistration?(stakeAddress: string): Promise<boolean>;
+
   // ---- transaction history (needs historic state: Blockfrost/Koios; Ogmios omits → unsupported) ----
   /** Transactions touching an address, newest first; `page` is 1-based. */
   getAddressTransactions?(address: string, page?: number): Promise<AddressTxRef[]>;

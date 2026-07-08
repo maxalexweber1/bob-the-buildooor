@@ -10,6 +10,7 @@ import {
   blake2b_224,
 } from '@harmoniclabs/buildooor';
 import { deriveKey, deriveAccountKey, deriveFromAccount, Role } from './keys';
+import { fromHex } from './crypto/encoding';
 
 export type Network = 'mainnet' | 'testnet';
 
@@ -24,6 +25,18 @@ export type PaymentRole = typeof Role.External | typeof Role.Internal;
 /** blake2b_224 (28-byte) hash of raw Ed25519 public-key bytes — a Cardano key hash. */
 export function keyHash28(pubKeyBytes: Uint8Array): Uint8Array {
   return blake2b_224(pubKeyBytes);
+}
+
+/**
+ * CIP-30 address input → Address, accepting bech32 OR hex bytes (project rule, CLAUDE.md §6).
+ * Dispatch is unambiguous: every Cardano bech32 address prefix (`addr…`/`stake…`) contains letters
+ * outside [0-9a-f], so an input that is pure hex can only be address bytes. Hex goes through the
+ * STRICT `fromHex` — malformed input throws, it is never coerced.
+ */
+export function addressFromCip30Input(input: string): Address {
+  const body = input.startsWith('0x') ? input.slice(2) : input;
+  const looksHex = /^[0-9a-fA-F]*$/.test(body);
+  return looksHex ? Address.fromBytes(fromHex(input)) : Address.fromString(input);
 }
 
 /** Payment key-hash credential for m/1852'/1815'/account'/role/index (role 0=external, 1=change). */

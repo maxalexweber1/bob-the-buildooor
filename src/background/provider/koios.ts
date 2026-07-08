@@ -170,6 +170,13 @@ export class KoiosProvider implements IChainProvider {
     return (rows[0]?.num_confirmations ?? 0) > 0;
   }
 
+  /** CIP-95 stake-key registration state via /account_info `status` ('registered' | 'not registered'). */
+  async getStakeRegistration(stakeAddress: string): Promise<boolean> {
+    const rows =
+      (await this.post<Array<{ status: string | null }>>('/account_info', { _stake_addresses: [stakeAddress] })) ?? [];
+    return rows[0]?.status === 'registered';
+  }
+
   /** Recent transactions at an address, newest first (PostgREST order/limit/offset; 20/page). */
   async getAddressTransactions(address: string, page = 1): Promise<AddressTxRef[]> {
     const rows =

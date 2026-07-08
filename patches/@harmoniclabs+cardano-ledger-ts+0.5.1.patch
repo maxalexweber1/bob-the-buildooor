@@ -62,7 +62,7 @@ index 20f52d6..bd50ea6 100644
      };
      return AuxiliaryData;
 diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
-index 05bf826..9d1ceaf 100644
+index 05bf826..9a149f1 100644
 --- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
 +++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
 @@ -24,7 +24,7 @@ var credentials_1 = require("../../credentials/index.js");
@@ -74,3 +74,18 @@ index 05bf826..9d1ceaf 100644
  var ICert_1 = require("../../ledger/certs/ICert.js");
  var TxWithdrawals_2 = require("../../ledger/TxWithdrawals.js");
  var InvalidCborFormatError_1 = require("../../utils/InvalidCborFormatError.js");
+@@ -190,9 +190,13 @@ var TxBody = /** @class */ (function () {
+             collateralReturn instanceof output_1.TxOut ? collateralReturn :
+                 new output_1.TxOut(collateralReturn));
+         // -------------------------------------- totCollateral -------------------------------------- //
++        // patched: upstream inverted the guard — totCollateral was only assigned when INVALID, so a
++        // valid value was always dropped (breaks Babbage field 17 on parse AND on construction).
+         if (!(totCollateral === undefined ||
+             (0, ints_1.canBeUInteger)(totCollateral)))
+-            this.totCollateral = (0, ints_1.maybeBigUint)(totCollateral);
++            throw new Error("invalid 'totCollateral' field");
++        this.totCollateral = totCollateral === undefined ? undefined :
++            (0, ints_1.maybeBigUint)(totCollateral);
+         // -------------------------------------- reference inputs -------------------------------------- //  
+         if (!(refInputs === undefined ||
+             (Array.isArray(refInputs) &&
