@@ -10,8 +10,25 @@ import type { TxSummary } from '../core/tx/summary';
 import type { HistoryEntry } from '../core/tx/history';
 import type { PendingApproval } from '../background/dapp/approvals';
 import type { ResolvedHandle } from '../core/handle';
+import type { LedgerTxPayload, HwWitness } from '../core/hw/ledgerTx';
 
 export type { ChainTip, TxSummary, HistoryEntry, PendingApproval, AssetMetadata, ResolvedHandle };
+export type { LedgerTxPayload, HwWitness };
+
+/** A paired hardware account as shown to the UI (the xpub itself stays in the background store). */
+export interface HwAccountView {
+  id: string;
+  kind: 'ledger' | 'trezor';
+  label: string;
+  createdAt: number;
+}
+
+/** Result of building a hardware send: summary for the review screen + the device signing payload. */
+export interface HwBuiltTx {
+  id: string;
+  summary: TxSummary;
+  ledgerTx: LedgerTxPayload;
+}
 
 /** Result of building a send: an id binding the approval to the exact decoded summary shown. */
 export interface BuiltTx {
@@ -80,7 +97,16 @@ export type WalletCommand =
   | { type: 'getTxStatus'; txHash: string }
   | { type: 'getAssetMetadata'; unit: string }
   | { type: 'getAssetImage'; uri: string }
-  | { type: 'resolveHandle'; handle: string };
+  | { type: 'resolveHandle'; handle: string }
+  | { type: 'hwListAccounts' }
+  | { type: 'hwImportAccount'; kind: 'ledger' | 'trezor'; xpub: string; label: string }
+  | { type: 'hwForgetAccount'; id: string }
+  | { type: 'hwOverview'; id: string }
+  | { type: 'hwBuildSend'; id: string; toAddress: string; lovelace: string; memo?: string }
+  | { type: 'hwCancelSend' }
+  | { type: 'hwSubmitSigned'; id: string; deviceTxHashHex: string; witnesses: HwWitness[] }
+  | { type: 'hwTrezorPair' }
+  | { type: 'hwTrezorSign'; id: string };
 
 export interface InternalRequest {
   target: typeof INTERNAL_TARGET;

@@ -23,8 +23,12 @@
   },
   "comment": "Exact-pinned versions (no ^): a key-handling extension minimizes supply-chain drift (CLAUDE.md §2). Bump deliberately. @harmoniclabs/buildooor: bump when the keepRelevant fix (PR#12) ships.",
   "dependencies": {
+    "@cardano-foundation/ledgerjs-hw-app-cardano": "8.0.0",
     "@harmoniclabs/buildooor": "0.2.7",
+    "@ledgerhq/hw-transport-webhid": "6.36.0",
     "@scure/bip39": "1.6.0",
+    "@trezor/connect-webextension": "9.7.3",
+    "buffer": "6.0.3",
     "react": "18.3.1",
     "react-dom": "18.3.1",
     "zustand": "4.5.7"

@@ -1,7 +1,7 @@
 // Privileged wallet command handlers (T1.7). Invoked by the router ONLY for trusted extension-page
 // senders. Composes the vault (M1) with key/address derivation. Decrypted material (mnemonic, root)
 // lives only in these function scopes and is discarded on return (CLAUDE.md §1.1).
-import type { WalletCommand, WalletStatus, WalletOverview, BuiltTx, SubmitResult, UtxoView } from '../shared/internal';
+import type { WalletCommand, WalletStatus, WalletOverview, BuiltTx, SubmitResult, UtxoView, HwAccountView, HwBuiltTx } from '../shared/internal';
 import { vault } from './vault';
 import { chromeSessionStore, chromeLocalStore } from './storage';
 import { touchAutoLock, cancelAutoLock } from './autolock';
@@ -24,6 +24,12 @@ import { getPendingApproval, respondApproval } from './dapp/approvals';
 import { fetchAssetImage } from './assetImage';
 import { allowlist } from './dapp/allowlist';
 import { resolveHandle, type ResolvedHandle } from '../core/handle';
+import { Tx } from '@harmoniclabs/buildooor';
+import { hwAccounts } from './hw/accounts';
+import { hwAccountKeys, hwBaseAddress, type HwAccountKeys } from '../core/hw/xpubAccount';
+import { applyHwWitnesses, mapTxForLedger, type HwSigner, type HwWitness, type LedgerTxPayload } from '../core/hw/ledgerTx';
+import { trezorReadAccountXpub, trezorSignTx } from './hw/trezor';
+import { discoverAddresses } from './discovery';
 
 async function status(): Promise<WalletStatus> {
   return { initialized: await vault.isInitialized(), unlocked: await vault.isUnlocked() };
@@ -274,6 +280,152 @@ async function resolveHandleCmd(input: string): Promise<ResolvedHandle> {
   return resolveHandle(input, { getAssetAddresses });
 }
 
+// ---- Hardware wallets (T6.3) ----
+// Watch-only accounts derived from a device xpub. These commands never touch the vault (a Ledger-only
+// user has no mnemonic and no unlock): the device is the signer AND the physical consent gate
+// (CLAUDE.md §1.4); the options page additionally shows the decoded summary before the device is
+// invoked (§1.5). Device IO (WebHID) lives in the options PAGE — never here in the SW (MV3: the HID
+// chooser needs a user gesture in a page). The SW only derives addresses, builds, verifies, submits.
+
+const HW_PENDING_KEY = 'bob:pendingHwTx';
+
+interface PendingHwTx {
+  id: string;
+  accountId: string;
+  txCbor: string; // unsigned
+  signers: HwSigner[];
+  /** Device-neutral signing payload — Ledger consumes it in the options page, Trezor here in the SW. */
+  hwTx: LedgerTxPayload;
+}
+
+/** Per-account address context: discovered chains + owner map (the hw analog of buildSendTx's). */
+async function hwAddressContext(keys: HwAccountKeys) {
+  const s = await settings.get();
+  const provider = await getProvider();
+  const net = bech32Network(s.network);
+
+  const extAt = (i: number) => hwBaseAddress(keys, net, i, Role.External);
+  const chgAt = (i: number) => hwBaseAddress(keys, net, i, Role.Internal);
+  const external = await discoverAddresses(extAt, Role.External, provider);
+  const change = await discoverAddresses(chgAt, Role.Internal, provider);
+  const receiveIdx = nextReceiveIndex(external);
+  const changeIdx = nextReceiveIndex(change);
+  const receiveAddress = extAt(receiveIdx);
+  const changeAddress = chgAt(changeIdx);
+
+  const ownerByAddress = new Map<string, HwSigner>();
+  for (const a of external) ownerByAddress.set(a.address, { role: Role.External, index: a.index });
+  for (const a of change) ownerByAddress.set(a.address, { role: Role.Internal, index: a.index });
+  ownerByAddress.set(receiveAddress, { role: Role.External, index: receiveIdx });
+  ownerByAddress.set(changeAddress, { role: Role.Internal, index: changeIdx });
+
+  return { s, provider, external, change, receiveAddress, changeAddress, ownerByAddress };
+}
+
+async function hwOverviewCmd(accountId: string): Promise<WalletOverview> {
+  const account = await hwAccounts.get(accountId);
+  const s0 = await settings.get();
+  const cacheKey = `hw:${accountId}:${s0.network}:${s0.providerKind}`;
+  const hit = overviewCache.get(cacheKey);
+  if (hit && Date.now() - hit.at < OVERVIEW_TTL_MS) return hit.data;
+
+  const keys = hwAccountKeys(account.xpub);
+  const { s, provider, external, change, receiveAddress, ownerByAddress } = await hwAddressContext(keys);
+  const utxos = await collectUtxos(provider, [...ownerByAddress.keys()]);
+
+  const data: WalletOverview = {
+    network: s.network,
+    receiveAddress,
+    usedExternal: external.length,
+    usedChange: change.length,
+    balance: aggregateBalance(utxos),
+  };
+  overviewCache.set(cacheKey, { at: Date.now(), data });
+  return data;
+}
+
+async function hwBuildSendTx(accountId: string, toAddress: string, lovelace: string, memo?: string): Promise<HwBuiltTx> {
+  const account = await hwAccounts.get(accountId);
+  const keys = hwAccountKeys(account.xpub);
+  const { s, provider, changeAddress, ownerByAddress } = await hwAddressContext(keys);
+
+  const utxos = await collectUtxos(provider, [...ownerByAddress.keys()]);
+  const tx = buildSend(
+    {
+      protocolParameters: await provider.getProtocolParameters(),
+      genesisInfos: await provider.getGenesisInfos(),
+      utxos,
+      changeAddress,
+    },
+    { toAddress, lovelace: BigInt(lovelace) },
+    memo !== undefined ? { memo } : {},
+  );
+
+  // Owners of the inputs buildooor actually selected, keyed by output ref (what the mapper needs).
+  const inputOwners = new Map<string, HwSigner>();
+  for (const u of utxos) {
+    const owner = ownerByAddress.get(u.resolved.address.toString());
+    if (owner) inputOwners.set(u.utxoRef.toString(), owner);
+  }
+
+  const { payload, signers } = mapTxForLedger(tx, {
+    network: s.network,
+    inputOwners,
+    ownedAddresses: ownerByAddress,
+  });
+
+  const summary = summarizeTx(tx, utxos, new Set(ownerByAddress.keys()));
+  const pending: PendingHwTx = {
+    id: crypto.randomUUID(),
+    accountId,
+    txCbor: toHex(tx.toCborBytes()),
+    signers,
+    hwTx: payload,
+  };
+  await chromeSessionStore.set(HW_PENDING_KEY, pending);
+  return { id: pending.id, summary, ledgerTx: payload };
+}
+
+/** Shared finisher for both devices: verify everything the device returned, then submit. */
+async function finishHwSubmit(pending: PendingHwTx, deviceTxHashHex: string, witnesses: HwWitness[]): Promise<SubmitResult> {
+  const account = await hwAccounts.get(pending.accountId);
+  const keys = hwAccountKeys(account.xpub);
+  const tx = Tx.fromCbor(pending.txCbor);
+  // Rejects on tx-hash mismatch, missing/extra witnesses, or any signature that doesn't verify
+  // against the xpub-derived keys — whatever the device returned, we only submit what was approved.
+  applyHwWitnesses(tx, witnesses, deviceTxHashHex, keys, pending.signers);
+
+  const provider = await getProvider();
+  const txHash = await provider.submitTx(toHex(tx.toCborBytes()));
+
+  await chromeSessionStore.remove(HW_PENDING_KEY);
+  overviewCache.clear(); // balance changed
+  return { txHash };
+}
+
+async function loadPendingHwTx(id: string): Promise<PendingHwTx> {
+  const pending = await chromeSessionStore.get<PendingHwTx>(HW_PENDING_KEY);
+  if (!pending || pending.id !== id) throw new Error('no matching pending hardware transaction');
+  return pending;
+}
+
+async function hwSubmitSignedTx(id: string, deviceTxHashHex: string, witnesses: HwWitness[]): Promise<SubmitResult> {
+  return finishHwSubmit(await loadPendingHwTx(id), deviceTxHashHex, witnesses);
+}
+
+/** Trezor signing runs HERE (the SDK's supported context): popup + device confirm, then verify. */
+async function hwTrezorSignTx(id: string): Promise<SubmitResult> {
+  const pending = await loadPendingHwTx(id);
+  const account = await hwAccounts.get(pending.accountId);
+  if (account.kind !== 'trezor') throw new Error('pending transaction does not belong to a Trezor account');
+  const { deviceTxHashHex, witnesses } = await trezorSignTx(pending.hwTx);
+  return finishHwSubmit(pending, deviceTxHashHex, witnesses);
+}
+
+function hwAccountView(a: { id: string; kind: 'ledger' | 'trezor'; label: string; createdAt: number }): HwAccountView {
+  return { id: a.id, kind: a.kind, label: a.label, createdAt: a.createdAt };
+}
+
 async function approveSendTx(id: string): Promise<SubmitResult> {
   const pending = await chromeSessionStore.get<PendingTx>(PENDING_KEY);
   if (!pending || pending.id !== id) throw new Error('no matching pending transaction');
@@ -387,6 +539,33 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
 
     case 'resolveHandle':
       return resolveHandleCmd(command.handle);
+
+    case 'hwListAccounts':
+      return (await hwAccounts.list()).map(hwAccountView);
+
+    case 'hwImportAccount':
+      return hwAccountView(await hwAccounts.add(command.kind, command.xpub, command.label));
+
+    case 'hwForgetAccount':
+      return hwAccounts.remove(command.id);
+
+    case 'hwOverview':
+      return hwOverviewCmd(command.id);
+
+    case 'hwBuildSend':
+      return hwBuildSendTx(command.id, command.toAddress, command.lovelace, command.memo);
+
+    case 'hwCancelSend':
+      return chromeSessionStore.remove(HW_PENDING_KEY);
+
+    case 'hwSubmitSigned':
+      return hwSubmitSignedTx(command.id, command.deviceTxHashHex, command.witnesses);
+
+    case 'hwTrezorPair':
+      return hwAccountView(await hwAccounts.add('trezor', await trezorReadAccountXpub(0), 'Trezor'));
+
+    case 'hwTrezorSign':
+      return hwTrezorSignTx(command.id);
 
     default: {
       // Exhaustiveness guard — a new command type without a handler is a compile error.

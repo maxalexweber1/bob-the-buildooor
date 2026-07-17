@@ -185,13 +185,78 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
   - **Wallet-side decode DONE (anti-blind-sign §1.5):** `core/tx/certs.ts` (`certView`/`decodeCerts`/`decodeGovernance`) → human lines ("Delegate voting power to DRep X", "Register as a DRep (deposit 500 ₳)", …) + governance presence (votes flag + proposal count). Wired into `summarizeTx`; rendered in the signTx approval (`CertRows`/`GovernanceRows`); generic cert/gov warning removed. signTx witnessing offers stake+DRep keys via `flags.certificates/governance`.
   - files: `src/core/tx/certs.ts`, `src/core/tx/summary.ts`, `src/popup/Connect.tsx`, `patches/…` ; tests `test/certs.test.ts` (7) + `test/tx.test.ts` Conway end-to-end. 238 tests; typecheck + lint + build clean.
   - **remaining:** a vote/delegation tx **confirms on testnet** (needs a live wallet owning the stake cred — can't run here). Outbound gov-tx *building* (we don't do it; dApps/GovTool do) would deep-import the `ConwayCert*` classes or add b68105f's barrel re-export.
-- [ ] **T6.3 — Ledger (WebHID).** `ledgerjs-hw-app-cardano` + `hw-transport-webhid`; derive + sign; `tx.addVKeyWitness(...)`. **Transport outside the SW** (page/offscreen).
-  - files: `src/background/hw/ledger.ts`, offscreen doc
-  - **HARD MV3 constraint (standards review 2026-06, Chrome docs):** `HID.requestDevice()` *cannot* be called from the service worker and needs a user gesture — call it from the popup/options/offscreen page, then the SW may use `navigator.hid.getDevices()`. So device picking lives in a privileged page; the SW only re-binds to an already-granted device.
-  - done-when: a Ledger-signed tx confirms; keys never in the browser.
-- [ ] **T6.4 — Trezor (Connect, popup mode).** Account import + signing; document the iframe-in-extension workaround.
-  - files: `src/background/hw/trezor.ts`
-  - done-when: a Trezor-signed tx confirms.
+- [~] **T6.3 — Ledger (WebHID) — IMPLEMENTED (2026-07-17), on-device verification pending.**
+  `@cardano-foundation/ledgerjs-hw-app-cardano@8.0.0` + `@ledgerhq/hw-transport-webhid@6.36.0`
+  (+ `buffer` polyfill for their Node `Buffer` global), all exact-pinned; prod `npm audit` stays 0.
+  - **Architecture (MV3 constraint honoured):** ALL device IO lives in the **options page** (a full
+    tab — `HID.requestDevice()` needs a user-gesture page context, and the action popup dies when the
+    native chooser steals focus). The SW never touches the transport and never bundles the SDK
+    (verified in dist/: the SW chunk has zero SDK references — the SDK lands only in the options
+    bundle). Flow: page reads the account xpub → background stores it (watch-only) → background
+    builds + decodes → page shows the summary (§1.5) → page drives the device → background VERIFIES
+    the witnesses → submits.
+  - **Watch-only accounts:** `core/hw/xpubAccount.ts` soft-derives payment/stake keys + base
+    addresses from the CIP-1852 account xpub (m/1852'/1815'/0') — no private material in the browser,
+    ever. Unit-proven equal to the hot-wallet XPrv derivation. Discovery reuses the gap-limit walk
+    via the new `discoverAddresses(addressAt, …)` generalization (`background/discovery.ts`).
+  - **Byte-exactness (the HW trap):** the device signs ITS OWN re-serialization of the tx, so the
+    request mirrors buildooor's layout — outputs as Babbage MAP format (buildooor always emits
+    CborMap outputs), `tagCborSets: false` (buildooor doesn't 258-tag sets). Any drift is caught, not
+    submitted: `applyHwWitnesses` (`core/hw/ledgerTx.ts`) requires device-txHash == our body hash,
+    exact signer coverage (no missing/extra paths), and every signature to Ed25519-verify against the
+    xpub-derived key. Malformed sigs (crypto-layer throws) reject cleanly.
+  - **Scope v1:** plain payments (ADA + assets + CIP-20 memo) — exactly what `buildSend` produces;
+    `mapTxForLedger` rejects certs/withdrawals/mint/Plutus/collateral/etc. BY NAME
+    (`HwUnsupportedError`), never silently drops. dApp CIP-30 `signTx` does NOT route to hardware yet
+    (arbitrary dApp txs need the full feature mapping) — a Ledger account is popup-invisible, managed
+    entirely in the options tab (list/pair/forget, balance, receive, send). No vault/unlock required
+    (a hardware-only user has no mnemonic; the device is the §1.4 consent gate, the page summary the
+    §1.5 decode).
+  - files (as built): `core/hw/xpubAccount.ts`, `core/hw/ledgerTx.ts` (both pure), `background/hw/accounts.ts`,
+    `background/walletHandlers.ts` (hw* commands), `background/discovery.ts`, `shared/internal.ts`,
+    `shared/walletClient.ts`, `options/ledgerDevice.ts` (SDK boundary), `options/nodeBuffer.ts`,
+    `options/Ledger.tsx`, `options/Options.tsx` (tab)
+  - tests: ✅ `test/hw.test.ts` (14 device-free cases — the "device" is the same seed's XPrv:
+    xpub↔XPrv derivation equality, xpub validation, payload mapping incl. paths/change/aux-hash,
+    unsupported-feature rejection, witness gate: valid/tampered/wrong-path/missing/extra/replayed-
+    from-other-tx, hash mismatch). 358 tests; typecheck + lint + build clean.
+  - **remaining (needs the physical device):** pair a real Ledger on preview, send, confirm on-chain
+    (done-when). First candidates if the device rejects: Cardano app version vs `tagCborSets`
+    expectations, and the MAP_BABBAGE output format on very old app versions.
+- [~] **T6.4 — Trezor (Connect) — IMPLEMENTED (2026-07-17), on-device verification pending.**
+  `@trezor/connect-webextension@9.7.3` (exact-pinned). The old iframe workaround is obsolete — this
+  package is Trezor's official MV3 path: the SDK runs in OUR SERVICE WORKER (its supported context —
+  the inverse of Ledger's page-side WebHID) and opens the Trezor-hosted popup (connect.trezor.io),
+  which does all device IO on Trezor's origin. Wiring uses the README's "manual content-script
+  injection": `src/content/trezorConnect.ts` (bundling Trezor's own relay) declared in the manifest
+  for `*://connect.trezor.io/9/*` ONLY — chosen over the broad `scripting` permission on purpose.
+  - **Shares the whole T6.3 stack:** same watch-only xpub accounts (`cardanoGetPublicKey` node →
+    publicKey‖chainCode), same discovery, same `buildSend`, same neutral signing payload (extended
+    with `addressBech32` — Trezor consumes bech32, Ledger hex), same `applyHwWitnesses` gate. One
+    generalization: Trezor identifies witnesses by PUBKEY instead of BIP32 path — matching accepts
+    either, and the signature is ALWAYS verified against our xpub-derived key for the matched signer
+    (a device-claimed pubkey is never trusted on its own).
+  - **Byte-exactness:** same constraints pinned as Ledger — `format: MAP_BABBAGE` per output,
+    `tagCborSets: false`. Enum values are compile-checked against `PROTO` via type-only imports
+    (the package's prebuilt UMD `main` exports only the default object — a value import of PROTO
+    would be undefined at runtime; its `types` field is also broken → shimmed in
+    `src/types/trezor-connect-webextension.d.ts`, re-check on bump).
+  - **Accepted audit deviation (human-approved 2026-07-17):** the dep makes `npm audit --omit=dev`
+    red (`elliptic`, no fix, via Trezor's popup-side blockchain-link) — but that code provably never
+    ships: dist/ contains zero elliptic/browserify-sign code (verified; the only "secp256k1" strings
+    are buildooor's own Plutus builtins). Recorded in `docs/SECURITY.md`; supersedes T7.1's blanket
+    "0 prod vulns" as "0 vulns in shipped code". `TrezorConnect.init` manifest contact is
+    max@maxalexweber.de / the repo URL — adjust if another contact should own Trezor notices.
+  - files (as built): `background/hw/trezor.ts` (SDK boundary, SW), `content/trezorConnect.ts` +
+    `manifest.config.ts` (popup relay), `core/hw/ledgerTx.ts` (witness matching + addressBech32),
+    `background/walletHandlers.ts` (`hwTrezorPair`/`hwTrezorSign`, shared `finishHwSubmit`),
+    `background/hw/accounts.ts` (kind union), `shared/internal.ts`, `shared/walletClient.ts`,
+    `options/Ledger.tsx` (unified Hardware manager), `src/types/trezor-connect-webextension.d.ts`
+  - tests: ✅ `test/hw.test.ts` +4 (pubkey-matched witness accept, foreign-key reject,
+    no-identifier reject, cross-tx replay reject). 362 tests; typecheck + lint + build clean.
+  - **remaining (needs the physical device):** pair a real Trezor on preview, send, confirm on-chain
+    (done-when). Watchpoints: SW lifetime across a slow popup interaction (Trezor's SDK manages
+    keepalive — verify), and old firmware vs `tagCborSets`/MAP_BABBAGE expectations.
 - [ ] **T6.5 — CIP-103 bulk signing (DEFERRED, should-have).** `api.cip103.{signTxs,submitTxs}` — one approval for a chain of txs. **Deferred post-v1** (IMPLEMENTATION_PLAN §14): adoption unverified; implement as a pure add-on via the generic dispatch (T6.1) when a target DeFi dApp requires it. Approval UI must still decode **every** tx in the batch (CLAUDE.md §1.5) — no batch-blind-sign.
 
 ---
@@ -199,6 +264,12 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
 ## M7 — Hardening & Store Release
 
 - [x] **T7.1 — Dependency sandboxing & supply-chain.** Install scripts blocked by default (`.npmrc ignore-scripts=true` + `@lavamoat/allow-scripts`, only esbuild allow-listed); deps exact-pinned; lockfile committed; 0 prod vulns. No publish tokens (not published).
+  - **Gate redefinition (2026-07-17, T6.4, human-approved):** the audit target is now **0
+    vulnerabilities in SHIPPED code**. `npm audit --omit=dev` reports the unfixable `elliptic`
+    advisory inside `@trezor/connect`'s popup-side tree, which never enters `dist/` (build-time
+    verified — see T6.4 + `docs/SECURITY.md`). All other prod findings remain 0. Dev-toolchain
+    advisories (vitest/vite/esbuild, published 2026-07) are tracked separately — toolchain bump is
+    an open follow-up.
 - [x] **T7.2 — Security review.** Threat-model pass recorded in `docs/SECURITY.md`: §1 invariants verified, blind-sign warning, CSPRNG, `frame-ancestors 'none'`, clipboard caution, `textContent`-only rendering.
 - [~] **T7.3 — Test suite.** Unit ✅ 24 files / 168 tests; integration ✅ preview proof scripts (`scripts/`); e2e (Playwright) pending. See `docs/TESTING.md`.
 - [~] **T7.4 — Firefox port.** **Planned, not shipped — needs a Firefox build target + runtime.** Compat audit done; two blockers (event-page background, `browser.*` namespace) documented in `docs/FIREFOX.md`.

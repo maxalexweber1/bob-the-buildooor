@@ -78,7 +78,19 @@ CSPRNG, CSP `frame-ancestors`, recipient paste caution. Each fix has unit-test c
 - **CIP-95 governance signing** is implemented but **unverified** — the pinned buildooor can't build
   or round-trip Conway governance certs (`isCertificate` rejects them). Revisit on buildooor support.
 - `getRegisteredPubStakeKeys` doesn't yet query on-chain registration (returns `[]`).
-- Hardware-wallet support (Ledger/Trezor) not yet implemented.
+- Hardware-wallet support (T6.3 Ledger / T6.4 Trezor) is implemented but **not yet verified on
+  physical devices**. Trust model: accounts are watch-only xpubs; every device witness is verified
+  against OUR tx body hash with OUR xpub-derived keys before submit (`core/hw/ledgerTx.ts`) — device
+  output is never trusted blindly. Device IO: Ledger over WebHID in the options page; Trezor via
+  `@trezor/connect-webextension` in the SW + the Trezor-hosted popup (content script scoped to
+  `connect.trezor.io/9/*` only; no `scripting` permission).
+- **Accepted audit deviation (2026-07-17, human-approved):** `npm audit --omit=dev` reports the
+  `elliptic` advisory (GHSA-848j-6mx2-7j84, no fix available) via `@trezor/connect` →
+  `@trezor/blockchain-link` → `crypto-browserify`. That code path belongs to Trezor's popup-side
+  core, which runs on connect.trezor.io — **it is not part of our shipped bundle**. Verified at
+  build time: no `elliptic`/`browserify-sign` package code in `dist/` (the only string matches are
+  buildooor's own pure-JS secp256k1 Plutus builtins). Shipped-code vulnerability count remains 0;
+  re-verify the dist grep when bumping `@trezor/*`.
 - Firefox build not yet shipped (`docs/FIREFOX.md`); browser/e2e checks are manual (`docs/VERIFY.md`).
 - Not yet exercised by an external penetration test.
 

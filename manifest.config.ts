@@ -37,6 +37,13 @@ export default defineManifest({
       js: ['src/content/content.ts'],
       run_at: 'document_start',
     },
+    // Trezor Connect popup bridge (T6.4): Trezor's own relay script, scoped to their popup origin
+    // only. Chosen over the `scripting` permission (README "manual injection") — a static,
+    // origin-limited declaration is the smaller, more auditable grant.
+    {
+      matches: ['*://connect.trezor.io/9/*'],
+      js: ['src/content/trezorConnect.ts'],
+    },
   ],
 
   // CIP-30 injection needs no host_permissions; <all_urls> on the content script suffices.
