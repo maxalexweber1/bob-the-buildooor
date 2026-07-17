@@ -84,13 +84,16 @@ CSPRNG, CSP `frame-ancestors`, recipient paste caution. Each fix has unit-test c
   output is never trusted blindly. Device IO: Ledger over WebHID in the options page; Trezor via
   `@trezor/connect-webextension` in the SW + the Trezor-hosted popup (content script scoped to
   `connect.trezor.io/9/*` only; no `scripting` permission).
-- **Accepted audit deviation (2026-07-17, human-approved):** `npm audit --omit=dev` reports the
-  `elliptic` advisory (GHSA-848j-6mx2-7j84, no fix available) via `@trezor/connect` →
-  `@trezor/blockchain-link` → `crypto-browserify`. That code path belongs to Trezor's popup-side
-  core, which runs on connect.trezor.io — **it is not part of our shipped bundle**. Verified at
-  build time: no `elliptic`/`browserify-sign` package code in `dist/` (the only string matches are
-  buildooor's own pure-JS secp256k1 Plutus builtins). Shipped-code vulnerability count remains 0;
-  re-verify the dist grep when bumping `@trezor/*`.
+- **Accepted audit deviation (2026-07-17, human-approved):** `npm audit --omit=dev` reports
+  advisories inside the `@trezor/connect` dependency tree — `elliptic` (GHSA-848j-6mx2-7j84, no fix)
+  via `@trezor/blockchain-link` → `crypto-browserify`, and `protobufjs` ≤7.6.2 (several advisories
+  incl. a code-execution CRITICAL; fixes only in protobufjs 8.x, outside Trezor's constraint) via
+  `@trezor/protobuf`/`@trezor/transport`, plus the depends-on-vulnerable cascade across `@trezor/*`.
+  All of it belongs to Trezor's popup-side core, which runs on connect.trezor.io — **none of it is
+  part of our shipped bundle**. Verified at build time: no `elliptic`/`browserify-sign`/`protobufjs`
+  package code in `dist/` (the only string matches are buildooor's own pure-JS secp256k1 Plutus
+  builtins). Shipped-code vulnerability count remains 0; re-run the dist grep when bumping
+  `@trezor/*`.
 - Firefox build not yet shipped (`docs/FIREFOX.md`); browser/e2e checks are manual (`docs/VERIFY.md`).
 - Not yet exercised by an external penetration test.
 

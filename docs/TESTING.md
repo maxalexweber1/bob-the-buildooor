@@ -1,9 +1,9 @@
 # Testing (T7.3)
 
-Three layers, per CLAUDE.md §7. Unit is the default and the gate; integration is testnet-only; e2e is
-checked manually against a loaded build (see `docs/VERIFY.md`).
+Three layers, per CLAUDE.md §7. Unit is the default and the gate; integration is testnet-only; e2e
+runs the built extension in Chromium via Playwright (plus the manual checklist in `docs/VERIFY.md`).
 
-## Unit (default, CI gate) — 24 files / 168 tests, all green
+## Unit (default, CI gate) — 37 files / 362 tests, all green
 
 `npm run test` (vitest). Covers the security-critical pure logic:
 
@@ -33,4 +33,18 @@ Empirical proof scripts under `scripts/` validate the buildooor recipes and real
 
 Confirmed preview tx hashes are recorded in the build history (spend `c8ccca0f…`, mint `3353511e…`,
 ref-script spend `461468ec…`).
+
+## E2E (Playwright, network-free)
+
+`npm run e2e` — builds `dist/` and drives the REAL extension in Chromium (`e2e/`, persistent context
+with `--load-extension`, a fresh profile per test so chrome.storage starts empty). Six specs cover
+the wallet lifecycle (restore → lock → wrong password → unlock), the **vault-at-rest invariants**
+(no mnemonic/password anywhere in chrome.storage.local; `localStorage` unused — §1.1/§1.2 asserted
+against the actual profile), the onboarding backup gate, and the full dApp bridge on a
+route-fulfilled fake origin: provider injection identity, first-`enable()` approval popup showing
+the real origin (§1.6), grant persistence (no re-prompt), and rejection → `APIError Refused (-3)`.
+
+Deliberately network-free: no provider credentials, chain fetches fail gracefully. dApp
+signTx/signData e2e would need a mockable chain provider (extension-SW fetches aren't
+Playwright-routable) — the candidate approach is pointing the Koios provider at a local mock server.
 

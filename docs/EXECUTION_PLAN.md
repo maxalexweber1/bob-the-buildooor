@@ -270,8 +270,26 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
     verified — see T6.4 + `docs/SECURITY.md`). All other prod findings remain 0. Dev-toolchain
     advisories (vitest/vite/esbuild, published 2026-07) are tracked separately — toolchain bump is
     an open follow-up.
+  - **Toolchain bump DONE (2026-07-17):** vite 5.4.21 → 8.1.5 (rolldown-based; build + chunk-naming
+    guard verified, no leading-underscore chunks), vitest 2.1.9 → 4.1.10 (`testTimeout: 30s` — the
+    pure-JS BIP32 derivation tests take 5–10s and vitest 4 enforces the 5s default strictly),
+    @vitejs/plugin-react 6.0.3, @crxjs/vite-plugin 2.7.1. All vite/vitest/esbuild dev advisories
+    cleared; the remaining audit findings are exclusively the documented Trezor-tree deviation
+    (now including a protobufjs critical — popup-side only, dist-verified absent, SECURITY.md).
 - [x] **T7.2 — Security review.** Threat-model pass recorded in `docs/SECURITY.md`: §1 invariants verified, blind-sign warning, CSPRNG, `frame-ancestors 'none'`, clipboard caution, `textContent`-only rendering.
-- [~] **T7.3 — Test suite.** Unit ✅ 24 files / 168 tests; integration ✅ preview proof scripts (`scripts/`); e2e (Playwright) pending. See `docs/TESTING.md`.
+- [x] **T7.3 — Test suite.** Unit ✅ 37 files / 362 tests (vitest 4); integration ✅ preview proof
+  scripts (`scripts/`); **e2e ✅ Playwright (2026-07-17)** — `npm run e2e` builds dist/ and drives
+  the REAL extension in Chromium (`e2e/`, persistent context + `--load-extension`, fresh profile per
+  test). 6 specs, network-free by design: (1) restore → lock → wrong-password → unlock lifecycle;
+  (2) **vault-at-rest invariants** — chrome.storage.local contains neither mnemonic nor password,
+  and `localStorage` is empty (§1.1/§1.2 checked against the actual profile); (3) onboarding
+  create-flow gates on the backup ack + word confirmation; (4) CIP-30 provider injected with the
+  right identity on a (route-fulfilled) dApp origin; (5) first `enable()` opens the approval popup
+  showing the REAL origin (§1.6), approve → working API (getNetworkId 0), grant persists, second
+  enable prompts nothing; (6) reject → `APIError Refused (-3)`, nothing granted. Notes:
+  `wallet.create` leaves the vault unlocked (session key cached) — the fixtures model that. dApp
+  signTx/signData e2e needs a mockable chain provider (SW fetches aren't Playwright-routable) —
+  candidate follow-up: point Koios at a local mock server. See `docs/TESTING.md`.
 - [~] **T7.4 — Firefox port.** **Planned, not shipped — needs a Firefox build target + runtime.** Compat audit done; two blockers (event-page background, `browser.*` namespace) documented in `docs/FIREFOX.md`.
 - [~] **T7.5 — Store listing.** Icons ✅; notes + permission justifications + privacy policy in `docs/STORE.md` / `docs/PRIVACY.md`. Screenshots + submission deferred (not a near-term task).
 
