@@ -8,7 +8,15 @@ import { touchAutoLock, cancelAutoLock } from './autolock';
 import { mnemonicToRoot, deriveKey, deriveFromAccount, Role } from '../core/keys';
 import { accountKeys, baseAddress, baseAddressFrom, bech32Network, keyHash28 } from '../core/address';
 import { cip113ParamsFor } from '../core/cip113/params';
-import { ownProgrammableAddresses } from '../core/cip113/address';
+import { ownProgrammableAddresses, programmableTokenAddress } from '../core/cip113/address';
+import { findRegistryNode } from '../core/cip113/registry';
+import {
+  Cip113TransferError,
+  buildProgrammableTransfer,
+  parseUtxoRef,
+  recipientProgrammableAddress,
+} from '../core/cip113/transfer';
+import { selectCollateral } from '../core/tx/collateral';
 import { aggregateBalance, valueView } from '../core/balance';
 import { buildSend } from '../core/tx/build';
 import { summarizeTx } from '../core/tx/summary';
@@ -267,6 +275,113 @@ async function buildSendTx(toAddress: string, lovelace: string, memo?: string): 
   return { id: pending.id, summary };
 }
 
+// ---- CIP-113 programmable-token transfer (T9.4/T9.5, EXPERIMENTAL — testnet config only) ----
+// Same pending/approve machinery as the plain send: the built tx is held in session keyed by id and
+// signed only after the user approves the decoded summary (§1.5). The AUTHORIZING signature is the
+// STAKE key (ownership = stake credential; requiredSigners carries its hash), which `approveSendTx`
+// derives generically from the stored (role,index) refs.
+async function buildProgrammableSendTx(unit: string, toAddress: string, quantity: string): Promise<BuiltTx> {
+  const s = await settings.get();
+  const cip113 = cip113ParamsFor(s.network, s.cip113Params);
+  if (!cip113?.transfer) {
+    throw new Error('CIP-113 transfers are not configured for this network (experimental feature)');
+  }
+  const provider = await getProvider();
+  const mnemonic = await vault.getMnemonic();
+  const root = mnemonicToRoot(mnemonic);
+  touchAutoLock();
+
+  const net = bech32Network(s.network);
+  const keys = accountKeys(root, 0);
+  const policyId = unit.slice(0, 56).toLowerCase();
+
+  // On-chain truth, resolved FRESH (T9.1 rule): the registry node for this policy + params UTxO.
+  const registryNode = await findRegistryNode(policyId, cip113, provider);
+  if (!registryNode?.utxo) throw new Error('this token is not registered as a CIP-113 programmable token');
+  const paramsRef = parseUtxoRef(cip113.transfer.protocolParamsRef);
+  const [protocolParamsUtxo] = await provider.resolveUtxos([paramsRef]);
+  if (!protocolParamsUtxo) throw new Error('the configured CIP-113 protocol-params UTxO does not exist');
+
+  // Sources: UTxOs at OUR programmable address carrying the token. v1 keeps selection simple and
+  // safe — only single-asset UTxOs are spent, so no OTHER programmable token can ride along and
+  // leak into regular change (the builder's postcondition would catch it, but don't build it).
+  const senderProgAddr = programmableTokenAddress(cip113.programmableLogicBase, keys.stakeKeyHash, net);
+  const progUtxos = await provider.getUtxos(senderProgAddr);
+  const sourceUtxos = progUtxos.filter((u) => {
+    const json = u.resolved.value.toJson() as Record<string, Record<string, string>>;
+    const policies = Object.keys(json).filter((p) => p !== '');
+    return policies.length === 1 && json[policyId]?.[unit.slice(56).toLowerCase()] !== undefined;
+  });
+  if (sourceUtxos.length === 0) {
+    throw new Error('no spendable UTxOs holding this programmable token (mixed-token UTxOs are not supported yet)');
+  }
+
+  // Regular wallet UTxOs fund fee/min-ADA and provide collateral.
+  const external = await discoverChain(root, s.network, Role.External, provider);
+  const change = await discoverChain(root, s.network, Role.Internal, provider);
+  const receiveIdx = nextReceiveIndex(external);
+  const changeIdx = nextReceiveIndex(change);
+  const changeAddress = baseAddressFrom(keys, net, changeIdx, Role.Internal);
+
+  const ownerByAddress = new Map<string, SignerRef>();
+  for (const a of external) ownerByAddress.set(a.address, { role: Role.External, index: a.index });
+  for (const a of change) ownerByAddress.set(a.address, { role: Role.Internal, index: a.index });
+  ownerByAddress.set(baseAddressFrom(keys, net, receiveIdx, Role.External), { role: Role.External, index: receiveIdx });
+  ownerByAddress.set(changeAddress, { role: Role.Internal, index: changeIdx });
+
+  const walletUtxos = await collectUtxos(provider, [...ownerByAddress.keys()]);
+  const collateral = selectCollateral(walletUtxos);
+  if (!collateral) throw new Error('no ADA-only UTxO available for collateral (need ~5 ADA)');
+  const fundingUtxos = walletUtxos.filter((u) => u.utxoRef.toString() !== collateral.utxoRef.toString());
+
+  const tx = buildProgrammableTransfer({
+    protocolParameters: await provider.getProtocolParameters(),
+    genesisInfos: await provider.getGenesisInfos(),
+    network: net,
+    cip113,
+    registryNode,
+    registryNodeUtxo: registryNode.utxo,
+    protocolParamsUtxo,
+    sourceUtxos,
+    unit: unit.toLowerCase(),
+    quantity: BigInt(quantity),
+    recipientBaseAddress: toAddress,
+    senderProgrammableAddress: senderProgAddr,
+    senderStakeKeyHash: keys.stakeKeyHash,
+    collateral,
+    fundingUtxos,
+    changeAddress,
+  });
+
+  // Signers: the STAKE key (authorization) + the owners of every wallet input the builder selected
+  // (funding and/or collateral — collateral needs its owner's witness too).
+  const utxoByRef = new Map([...walletUtxos, ...sourceUtxos].map((u) => [u.utxoRef.toString(), u]));
+  const signerByKey = new Map<string, SignerRef>([[`${Role.Staking}/0`, { role: Role.Staking, index: 0 }]]);
+  for (const inp of [...tx.body.inputs, ...(tx.body.collateralInputs ?? [])]) {
+    const u = utxoByRef.get(inp.utxoRef.toString());
+    const owner = u && ownerByAddress.get(u.resolved.address.toString());
+    if (owner) signerByKey.set(`${owner.role}/${owner.index}`, owner);
+  }
+
+  const ownedForSummary = new Set([...ownerByAddress.keys(), senderProgAddr]);
+  const summary = summarizeTx(tx, [...sourceUtxos, ...walletUtxos], ownedForSummary);
+  const pending: PendingTx = {
+    id: crypto.randomUUID(),
+    txCbor: toHex(tx.toCborBytes()),
+    signers: [...signerByKey.values()],
+  };
+  await chromeSessionStore.set(PENDING_KEY, pending);
+  return {
+    id: pending.id,
+    summary,
+    cip113: {
+      unit: unit.toLowerCase(),
+      quantity,
+      toProgrammableAddress: recipientProgrammableAddress(cip113, toAddress, net),
+    },
+  };
+}
+
 // ---- ADA Handle resolution (T8.1) ----
 // Read-only: maps `$handle` → current holder address via the provider's asset-holder index. No secret
 // access. The popup shows the resolved address for the user to verify before it ever reaches buildSend.
@@ -497,6 +612,16 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
 
     case 'buildSend':
       return buildSendTx(command.toAddress, command.lovelace, command.memo);
+
+    case 'buildProgrammableSend':
+      try {
+        return await buildProgrammableSendTx(command.unit, command.toAddress, command.quantity);
+      } catch (e) {
+        // Cip113TransferError messages are user-actionable (wrong config/script/balance) — surface
+        // them verbatim; anything else propagates through the generic handler path.
+        if (e instanceof Cip113TransferError) throw new Error(e.message);
+        throw e;
+      }
 
     case 'approveSend':
       return approveSendTx(command.id);

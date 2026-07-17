@@ -49,6 +49,8 @@ export interface RegistryNode {
 export interface RegistryNodeRef {
   node: RegistryNode;
   utxoRef: { txHash: string; index: number };
+  /** The full node UTxO — needed as a reference input by the transfer builder (T9.4). */
+  utxo?: UTxO;
 }
 
 /** The one chain capability the registry client needs: UTxOs (with inline datums) at an address. */
@@ -147,7 +149,7 @@ export async function findRegistryNode(
     const node = decodeRegistryNode(u.resolved.datum);
     if (!node || node.key !== wanted) continue;
     if (!holdsRegistryNft(u, params.registryNodePolicyId, node.key)) continue; // forged datum — skip
-    return { node, utxoRef: { txHash: u.utxoRef.id.toString(), index: u.utxoRef.index } };
+    return { node, utxoRef: { txHash: u.utxoRef.id.toString(), index: u.utxoRef.index }, utxo: u };
   }
   return null;
 }

@@ -46,6 +46,9 @@ export const wallet = {
   pingProvider: () => send<ChainTip>({ type: 'pingProvider' }),
   buildSend: (toAddress: string, lovelace: string, memo?: string) =>
     send<BuiltTx>({ type: 'buildSend', toAddress, lovelace, ...(memo !== undefined ? { memo } : {}) }),
+  // CIP-113 programmable-token transfer (T9.5, experimental — needs cip113Params.transfer config).
+  buildProgrammableSend: (unit: string, toAddress: string, quantity: string) =>
+    send<BuiltTx>({ type: 'buildProgrammableSend', unit, toAddress, quantity }),
   approveSend: (id: string) => send<SubmitResult>({ type: 'approveSend', id }),
   cancelSend: () => send<void>({ type: 'cancelSend' }),
   getPendingApproval: (reqId: string) =>

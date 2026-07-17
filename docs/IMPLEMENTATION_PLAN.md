@@ -430,18 +430,22 @@ Plutus build. Priority for a self-custody wallet:
   `api.cip103.signTxs()` is unverified (open question from the standards review). **Decision: defer to
   post-v1**, behind the generic extension-dispatch mechanism (§9) so it is a pure add-on when a target dApp
   actually requires it — no architectural debt from waiting. Re-evaluate once a concrete DeFi integration asks for it.
-- **CIP-113 programmable tokens — read-only first, transfers gated (2026-07-17).** The Cardano Foundation
-  reference implementation ([cip113-programmable-tokens](https://github.com/cardano-foundation/cip113-programmable-tokens))
-  is explicitly R&D-grade: unaudited, contracts may still change — which would change the
-  `programmable_logic_base` script hash and registry policy that all wallet-side logic keys on.
-  **Decisions:** (a) build discovery/display (EXECUTION_PLAN T9.1–T9.3) only against preview/preprod, NO
-  mainnet constants until an audited deployment exists; (b) transfer building (T9.4–T9.5) additionally needs
-  a recorded human sign-off (T1.1-style), since it introduces stake-key witnessing of script spends — a new
-  signing path (§10.3/§10.4 apply in full); (c) **CIP-30 exposure:** programmable-token UTxOs are excluded
-  from dApp-facing `getBalance`/`getUtxos`/`getCollateral` (they are not vkey-spendable; including them would
-  poison dApp coin selection) — popup display only, revisit if a CIP standardizes exposure; (d) registry-node
-  UTxO refs are resolved fresh at build time, never cached (upstream-documented pitfall). Re-verify the spec
-  status (CIPs PR #444) and per-network constants at implementation time.
+- **CIP-113 programmable tokens — fully implemented as EXPERIMENTAL, on-chain verification pending
+  (2026-07-17).** The Cardano Foundation reference implementation
+  ([cip113-programmable-tokens](https://github.com/cardano-foundation/cip113-programmable-tokens))
+  is R&D-grade: unaudited, contracts may still change — which would change every constant and script
+  the wallet-side logic keys on. **Decisions:** (a) discovery/display (T9.1–T9.3) AND transfers
+  (T9.4–T9.5) are implemented, but activation is config-only (`cip113Params` incl. the `transfer`
+  block with inline hash-verified scripts) and testnet-only — NO mainnet constants until an audited
+  deployment exists; (b) the transfer gate was **lifted by explicit human sign-off (2026-07-17,
+  "experimental anyway")** — the recorded residual risks are the upstream-undocumented redeemer/datum
+  shapes (assumptions listed in `core/cip113/transfer.ts`) which MUST be re-verified against a real
+  deployment before any value is at stake; (c) **CIP-30 exposure:** programmable-token UTxOs stay
+  excluded from dApp-facing `getBalance`/`getUtxos`/`getCollateral` (not vkey-spendable; would poison
+  dApp coin selection) — popup display + first-party transfer only; (d) registry-node UTxO refs are
+  resolved fresh at build time, never cached (upstream-documented pitfall); (e) the stake-key
+  authorization rides the existing generic signer (role/index refs) — no new key-storage surface.
+  Re-verify the spec status (CIPs PR #444) and per-network constants when a deployment publishes.
 - **Plutus ex-units without your own Ogmios infra:** Blockfrost/Koios don't offer a full `evaluateTransaction`
   like Ogmios → plan Ogmios+Kupo for M5, or ensure a provider eval endpoint.
 - **buildooor CJS bundling in an MV3 SW (`type:module`):** verify interop early in M0.

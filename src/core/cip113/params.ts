@@ -23,6 +23,30 @@ export interface Cip113Params {
   registryAddress: string;
   /** Policy id (56 hex) of the registry-node authenticity NFTs (token name == the node's key). */
   registryNodePolicyId: string;
+  /**
+   * T9.4 transfer support (EXPERIMENTAL — gate lifted by human decision 2026-07-17, testnet only).
+   * Optional: the read-only tier (discovery/display) works without it; transfers additionally need
+   * the deployed validators. Scripts are supplied INLINE as compiled CBOR hex (the pragmatic devnet
+   * path — upstream doesn't document where reference scripts live) and are HASH-VERIFIED against
+   * their expected credentials before any build (a wrong script is a hard error, never a signature).
+   */
+  transfer?: Cip113TransferParams;
+}
+
+export interface Cip113TransferParams {
+  /** Stake-script hash (56 hex) of the programmable-logic GLOBAL withdraw-zero validator. */
+  programmableLogicGlobal: string;
+  /** `txHash#index` of the protocol-parameters UTxO (mandatory reference input). */
+  protocolParamsRef: string;
+  /** Compiled Plutus V3 scripts, CBOR hex — passed AS-IS (never unwrap the CBOR layer; CLAUDE.md). */
+  scripts: {
+    /** programmable_logic_base spend validator — hash must equal `programmableLogicBase`. */
+    base: string;
+    /** programmable_logic_global stake validator — hash must equal `programmableLogicGlobal`. */
+    global: string;
+    /** Per-policy transfer-logic stake validators — hash must equal the REGISTRY node's credential. */
+    transferLogic: Record<string, string>;
+  };
 }
 
 /**
@@ -32,6 +56,23 @@ export interface Cip113Params {
 export const BUILTIN_CIP113_PARAMS: Partial<Record<Cip113Network, Cip113Params>> = {};
 
 const HASH28_RE = /^[0-9a-f]{56}$/;
+const UTXO_REF_RE = /^[0-9a-f]{64}#\d+$/;
+const CBOR_HEX_RE = /^[0-9a-f]{2,}$/i;
+
+function isValidTransferParams(t: unknown): t is Cip113TransferParams {
+  if (typeof t !== 'object' || t === null) return false;
+  const o = t as Record<string, unknown>;
+  if (typeof o.programmableLogicGlobal !== 'string' || !HASH28_RE.test(o.programmableLogicGlobal)) return false;
+  if (typeof o.protocolParamsRef !== 'string' || !UTXO_REF_RE.test(o.protocolParamsRef)) return false;
+  const s = o.scripts as Record<string, unknown> | undefined;
+  if (typeof s !== 'object' || s === null) return false;
+  if (typeof s.base !== 'string' || !CBOR_HEX_RE.test(s.base)) return false;
+  if (typeof s.global !== 'string' || !CBOR_HEX_RE.test(s.global)) return false;
+  if (typeof s.transferLogic !== 'object' || s.transferLogic === null) return false;
+  return Object.entries(s.transferLogic as Record<string, unknown>).every(
+    ([policy, hex]) => HASH28_RE.test(policy) && typeof hex === 'string' && CBOR_HEX_RE.test(hex),
+  );
+}
 
 /** Structural + format validation for one params entry. Trust-no-input: these come from storage. */
 export function isValidCip113Params(p: unknown, network: Cip113Network): p is Cip113Params {
@@ -40,6 +81,9 @@ export function isValidCip113Params(p: unknown, network: Cip113Network): p is Ci
   if (typeof o.programmableLogicBase !== 'string' || !HASH28_RE.test(o.programmableLogicBase)) return false;
   if (typeof o.registryNodePolicyId !== 'string' || !HASH28_RE.test(o.registryNodePolicyId)) return false;
   if (typeof o.registryAddress !== 'string') return false;
+  // Transfer support is optional, but if configured it must be well-formed — a half-broken transfer
+  // config should be a visible rejection, not a runtime surprise inside the builder.
+  if (o.transfer !== undefined && !isValidTransferParams(o.transfer)) return false;
   // The registry address must belong to the configured network — a mainnet address configured for
   // preview (or vice versa) means the whole entry is a mistake; ignore it rather than query nonsense.
   const wantPrefix = network === 'mainnet' ? 'addr1' : 'addr_test1';

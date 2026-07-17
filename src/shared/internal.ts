@@ -30,10 +30,20 @@ export interface HwBuiltTx {
   ledgerTx: LedgerTxPayload;
 }
 
+/** CIP-113 context attached to a programmable-token send (T9.5) — rendered in the approval UI. */
+export interface Cip113SendInfo {
+  unit: string;
+  quantity: string;
+  /** The recipient's PROGRAMMABLE address (derived from their base address's stake credential). */
+  toProgrammableAddress: string;
+}
+
 /** Result of building a send: an id binding the approval to the exact decoded summary shown. */
 export interface BuiltTx {
   id: string;
   summary: TxSummary;
+  /** Present when this is a CIP-113 programmable-token transfer (experimental, T9.5). */
+  cip113?: Cip113SendInfo;
 }
 export interface SubmitResult {
   txHash: string;
@@ -86,6 +96,7 @@ export type WalletCommand =
   | { type: 'updateSettings'; patch: Partial<WalletSettings> }
   | { type: 'pingProvider' }
   | { type: 'buildSend'; toAddress: string; lovelace: string; memo?: string }
+  | { type: 'buildProgrammableSend'; unit: string; toAddress: string; quantity: string }
   | { type: 'approveSend'; id: string }
   | { type: 'cancelSend' }
   | { type: 'getPendingApproval'; reqId: string }

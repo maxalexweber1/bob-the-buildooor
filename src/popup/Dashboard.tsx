@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useWallet } from './store';
 import { wallet } from '../shared/walletClient';
-import type { WalletOverview, AssetMetadata } from '../shared/internal';
+import type { WalletOverview, AssetMetadata, BuiltTx } from '../shared/internal';
 import type { AssetBalance } from '../core/balance';
 import type { Network } from '../background/provider/IChainProvider';
 import { primaryButton } from './App';
@@ -27,6 +27,8 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
   const imgFetched = useRef<Set<string>>(new Set());
   // The asset shown in the detail overlay (name, image, description, ids), or null.
   const [detail, setDetail] = useState<AssetBalance | null>(null);
+  // CIP-113 programmable-token send overlay (T9.5, experimental).
+  const [progSend, setProgSend] = useState<AssetBalance | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -200,16 +202,36 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
                     <span style={tokenBadge}>CIP-113</span>
                   </span>
                   <span style={{ fontSize: 13, color: '#4a5568' }}>{a.quantity}</span>
+                  <button
+                    type="button"
+                    style={progSendBtn}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setProgSend(a);
+                    }}
+                  >
+                    Send
+                  </button>
                 </li>
               );
             })}
           </ul>
           <p style={{ fontSize: 11, color: '#718096', margin: '6px 0 0' }}>
-            Held at the CIP-113 programmable-token contract. Transfers follow the issuer’s on-chain
-            rules and aren’t supported from this wallet yet — these tokens can’t be sent with the
-            regular Send flow.
+            Held at the CIP-113 programmable-token contract. Transfers run the issuer’s on-chain
+            rules (experimental — testnet configuration required).
           </p>
         </div>
+      )}
+
+      {progSend && (
+        <ProgrammableSend
+          a={progSend}
+          onClose={() => setProgSend(null)}
+          onDone={() => {
+            setProgSend(null);
+            void load();
+          }}
+        />
       )}
 
       <div style={card}>
@@ -244,6 +266,144 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
           onClose={() => setDetail(null)}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * CIP-113 programmable-token send (T9.5, EXPERIMENTAL). Form → decoded review → approve. The review
+ * makes the programmable mechanics explicit instead of a generic "script interaction" (§1.5): where
+ * the tokens actually land (the recipient's PROGRAMMABLE address, derived from their base address),
+ * and that the issuer's on-chain transfer rules run via two withdraw-zero validator invocations.
+ * Approval reuses the plain-send machinery — the signed tx is exactly the one summarized (id-bound).
+ */
+function ProgrammableSend({ a, onClose, onDone }: { a: AssetBalance; onClose: () => void; onDone: () => void }) {
+  const [to, setTo] = useState('');
+  const [qty, setQty] = useState('');
+  const [built, setBuilt] = useState<BuiltTx | null>(null);
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const name = a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+  const validQty = /^\d+$/.test(qty.trim()) && BigInt(qty.trim() || '0') > 0n;
+  const validTo = /^addr(_test)?1[0-9a-z]{20,}$/.test(to.trim());
+
+  async function review() {
+    setBusy(true);
+    setError(null);
+    try {
+      setBuilt(await wallet.buildProgrammableSend(a.unit, to.trim(), qty.trim()));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Build failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function approve() {
+    if (!built) return;
+    setBusy(true);
+    setError(null);
+    try {
+      setTxHash((await wallet.approveSend(built.id)).txHash);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Submit failed');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancel() {
+    await wallet.cancelSend().catch(() => undefined);
+    onClose();
+  }
+
+  return (
+    <div style={overlay} onClick={() => void cancel()}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 6 }}>
+          Send {name}
+          <span style={tokenBadge}>CIP-113</span>
+        </div>
+
+        {txHash ? (
+          <div>
+            <p style={{ fontSize: 13, color: '#2f855a' }}>Submitted ✓</p>
+            <code style={{ fontSize: 11, wordBreak: 'break-all' }}>{txHash}</code>
+            <button type="button" style={{ ...primaryButton, marginTop: 10 }} onClick={onDone}>
+              Done
+            </button>
+          </div>
+        ) : built ? (
+          <div>
+            <p style={{ fontSize: 12, color: '#718096', margin: '0 0 6px' }}>
+              Review — the tokens move to the recipient’s programmable address (ownership = their
+              stake credential); the issuer’s transfer rules run on-chain via two validator
+              invocations. This is an experimental CIP-113 transfer.
+            </p>
+            <div style={{ fontSize: 12, color: '#718096' }}>Sends</div>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>
+              {built.cip113?.quantity} × {name}
+            </div>
+            <div style={{ fontSize: 12, color: '#718096', marginTop: 6 }}>To (programmable address)</div>
+            <code style={{ fontSize: 11, wordBreak: 'break-all', display: 'block' }}>
+              {built.cip113?.toProgrammableAddress}
+            </code>
+            <div style={{ fontSize: 12, color: '#718096', marginTop: 6 }}>Recipient (base address entered)</div>
+            <code style={{ fontSize: 11, wordBreak: 'break-all', display: 'block' }}>{to.trim()}</code>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, marginTop: 8 }}>
+              <span>Network fee</span>
+              <span>{formatAda(built.summary.fee)} ₳</span>
+            </div>
+            {error && <p style={{ color: '#c53030', fontSize: 13 }}>{error}</p>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button type="button" style={{ ...primaryButton, flex: 1 }} disabled={busy} onClick={() => void approve()}>
+                {busy ? 'Sending…' : 'Approve & Send'}
+              </button>
+              <button type="button" style={{ ...primaryButton, flex: 1, background: '#a0aec0' }} disabled={busy} onClick={() => void cancel()}>
+                Reject
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div>
+            <label style={{ display: 'block', fontSize: 12, color: '#4a5568', margin: '6px 0 2px' }}>
+              Recipient base address (addr…) — their stake credential becomes the owner
+            </label>
+            <textarea
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+              rows={3}
+              spellCheck={false}
+              style={{ width: '100%', boxSizing: 'border-box', fontSize: 12, fontFamily: 'monospace' }}
+            />
+            <label style={{ display: 'block', fontSize: 12, color: '#4a5568', margin: '6px 0 2px' }}>
+              Quantity (you hold {a.quantity})
+            </label>
+            <input
+              value={qty}
+              onChange={(e) => setQty(e.target.value)}
+              inputMode="numeric"
+              style={{ width: '100%', boxSizing: 'border-box', fontSize: 13, padding: '6px 8px' }}
+            />
+            {error && <p style={{ color: '#c53030', fontSize: 13 }}>{error}</p>}
+            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+              <button
+                type="button"
+                style={{ ...primaryButton, flex: 1 }}
+                disabled={!validTo || !validQty || busy}
+                onClick={() => void review()}
+              >
+                {busy ? 'Building…' : 'Review'}
+              </button>
+              <button type="button" style={{ ...primaryButton, flex: 1, background: '#a0aec0' }} onClick={() => void cancel()}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -310,6 +470,16 @@ const assetRow: React.CSSProperties = {
   borderBottom: '1px solid #edf2f7',
 };
 const copyBtn: React.CSSProperties = {
+  fontSize: 11,
+  color: '#2b6cb0',
+  background: 'transparent',
+  border: '1px solid #cbd5e0',
+  borderRadius: 5,
+  padding: '2px 8px',
+  cursor: 'pointer',
+};
+const progSendBtn: React.CSSProperties = {
+  marginLeft: 8,
   fontSize: 11,
   color: '#2b6cb0',
   background: 'transparent',

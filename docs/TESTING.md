@@ -34,17 +34,25 @@ Empirical proof scripts under `scripts/` validate the buildooor recipes and real
 Confirmed preview tx hashes are recorded in the build history (spend `c8ccca0f…`, mint `3353511e…`,
 ref-script spend `461468ec…`).
 
-## E2E (Playwright, network-free)
+## E2E (Playwright, no real network)
 
 `npm run e2e` — builds `dist/` and drives the REAL extension in Chromium (`e2e/`, persistent context
-with `--load-extension`, a fresh profile per test so chrome.storage starts empty). Six specs cover
-the wallet lifecycle (restore → lock → wrong password → unlock), the **vault-at-rest invariants**
-(no mnemonic/password anywhere in chrome.storage.local; `localStorage` unused — §1.1/§1.2 asserted
-against the actual profile), the onboarding backup gate, and the full dApp bridge on a
-route-fulfilled fake origin: provider injection identity, first-`enable()` approval popup showing
-the real origin (§1.6), grant persistence (no re-prompt), and rejection → `APIError Refused (-3)`.
+with `--load-extension`, a fresh profile per test so chrome.storage starts empty). Eight specs:
 
-Deliberately network-free: no provider credentials, chain fetches fail gracefully. dApp
-signTx/signData e2e would need a mockable chain provider (extension-SW fetches aren't
-Playwright-routable) — the candidate approach is pointing the Koios provider at a local mock server.
+- **Network-free** (`wallet.spec.ts`, `dapp.spec.ts`): wallet lifecycle (restore → lock → wrong
+  password → unlock), the **vault-at-rest invariants** (no mnemonic/password anywhere in
+  chrome.storage.local; `localStorage` unused — §1.1/§1.2 asserted against the actual profile), the
+  onboarding backup gate, and the dApp bridge on a route-fulfilled fake origin: provider injection
+  identity, first-`enable()` approval popup showing the real origin (§1.6), grant persistence (no
+  re-prompt), rejection → `APIError Refused (-3)`.
+- **Mock-provider** (`send.spec.ts` + `mockKoios.ts`): extension-SW fetches aren't
+  Playwright-routable, so a local Koios-shaped HTTP mock (permissive CORS — localhost needs no host
+  permission) serves params/UTxOs and records submits. Covers the full §1.5 send path — form →
+  decoded review → approve → the mock's captured CBOR is decoded in Node and must match what was
+  approved (recipient, amount, funding input), with the single vkey witness **cryptographically
+  verified** against the wallet's payment key over the body hash — and dApp `signData` with its
+  per-call approval (§1.4), the returned COSE_Sign1 verified against the wallet key and payload.
+
+Still manual: dApp `signTx` (needs a dApp-built tx — covered at the unit layer), hardware-device
+flows, and the visual checklist in `docs/VERIFY.md`.
 

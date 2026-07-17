@@ -287,9 +287,15 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
   right identity on a (route-fulfilled) dApp origin; (5) first `enable()` opens the approval popup
   showing the REAL origin (§1.6), approve → working API (getNetworkId 0), grant persists, second
   enable prompts nothing; (6) reject → `APIError Refused (-3)`, nothing granted. Notes:
-  `wallet.create` leaves the vault unlocked (session key cached) — the fixtures model that. dApp
-  signTx/signData e2e needs a mockable chain provider (SW fetches aren't Playwright-routable) —
-  candidate follow-up: point Koios at a local mock server. See `docs/TESTING.md`.
+  `wallet.create` leaves the vault unlocked (session key cached) — the fixtures model that.
+  **Mock-provider tier ✅ (same day):** `e2e/mockKoios.ts` — SW fetches aren't Playwright-routable,
+  so the Koios provider is pointed at a local HTTP mock (permissive CORS; localhost needs no host
+  permission; settings injected via the internal `updateSettings` command). Adds (7) the full §1.5
+  send path with the SUBMITTED CBOR decoded in Node and held against what was approved (recipient/
+  amount/input + the vkey witness Ed25519-verified against the wallet key over the body hash) and
+  (8) dApp `signData` per-call approval (§1.4) with the COSE_Sign1 verified against the wallet key.
+  8/8 specs green (~50 s). Still manual: dApp signTx e2e (needs a dApp-built tx; unit-covered),
+  hardware devices, `docs/VERIFY.md` visuals. See `docs/TESTING.md`.
 - [~] **T7.4 — Firefox port.** **Planned, not shipped — needs a Firefox build target + runtime.** Compat audit done; two blockers (event-page background, `browser.*` namespace) documented in `docs/FIREFOX.md`.
 - [~] **T7.5 — Store listing.** Icons ✅; notes + permission justifications + privacy policy in `docs/STORE.md` / `docs/PRIVACY.md`. Screenshots + submission deferred (not a near-term task).
 
@@ -389,35 +395,53 @@ tokens are invisible; `buildSend()` (`src/core/tx/build.ts`) can't produce the r
     assets from `balance` (never `programmable`) and keep an explicit policy-guard — re-open this task
     then.
   - done-when: ✅ badge + section render for a populated `programmable` bundle; plain send untouched.
-- [ ] **T9.4 — Transfer builder (`buildProgrammableTransfer`) — GATED on upstream audit + T1.1-style
-  human sign-off.** Compose from existing `plutusBuild.ts` machinery (2-pass eval, collateral, ref
-  inputs — T5.3/T5.4). Skeleton per the upstream integration guide:
-  - input: sender's UTxO at `addr(programmable_logic_base, senderCred)`;
-  - output: `addr(programmable_logic_base, recipientCred)` + tokens + min-ADA (datum per substandard);
-  - **reference inputs (both mandatory):** protocol-params UTxO + the token's registry-node UTxO
-    (resolved fresh — see T9.1);
-  - **withdraw-zero invocations (both mandatory, tx fails without them):**
-    `(programmable_logic_global, 0)` + `(transfer_logic_script, 0)`;
-  - redeemer on the global: `TransferAct { proofs: [TokenExists { nodeIdx }] }`; a
-    `TokenDoesNotExist` covering-node proof for any non-programmable policy in the same UTxO;
-  - **authorization inverts the normal model:** the required witness is the **owner-credential key**
-    (usually the STAKE key, not the payment key). Signer must witness with the stake XPrv here —
-    touches keyring/signer (§1.1, §1.4): per-call consent, key material transient-scope only, unit
-    tests mandatory (§7 — "touches key handling and signing").
-  - **distinct error for unregistered script stake address** (ledger-level rejection, not a validator
-    error — confusing upstream pitfall; surface it explicitly).
-  - files: `src/core/tx/cip113Build.ts`, `src/background/signer.ts`, `src/core/cip113/registry.ts`
-  - done-when: a reference-impl token transfer confirms on preview; unit tests cover the skeleton
-    (withdrawals present, ref inputs present, redeemer shape, stake-key witness selected).
-- [ ] **T9.5 — Send flow + approval decode (§1.5, anti-blind-sign).** Route programmable tokens
-  (replacing T9.3's refusal) through T9.4. The approval screen must decode the CIP-113 shape into
-  human language — "Transfer <n> <token> to <recipient> (programmable token — issuer transfer rules
-  apply)" — and explicitly explain the withdraw-zero script invocations instead of showing a generic
-  "script interaction". Never an opaque blob.
-  - files: `src/popup/Send.tsx`, `src/core/tx/summary.ts`, `src/popup/Connect.tsx` (dApp-built CIP-113
-    txs get the same decode)
-  - done-when: end-to-end send of a programmable token on preview with a fully decoded approval;
-    a dApp-submitted CIP-113 transfer via `signTx` renders the same summary.
+- [~] **T9.4 — Transfer builder — IMPLEMENTED (2026-07-17), on-chain verification pending.**
+  **GATE LIFTED by explicit human decision (2026-07-17): "experimental anyway" — testnet-only.**
+  Mainnet remains impossible regardless (no deployment constants exist).
+  - files (as built): `src/core/cip113/transfer.ts` (`buildProgrammableTransfer`), `params.ts`
+    (`Cip113TransferParams` — validated config block), `registry.ts` (node ref now carries the UTxO).
+  - **Shape per the upstream guide:** script-spend of the sender's programmable UTxOs (base
+    validator), output at `addr(base, recipientStakeCred)` + token change back to the SENDER's
+    programmable address (never a regular address), BOTH reference inputs (registry node FRESH +
+    protocol params), BOTH withdraw-zero invocations, `TransferAct{TokenExists{node_idx}}` on the
+    global, `requiredSigners = [stake key hash]` (ownership inverts the payment-key model — the
+    existing generic signer derives role-2 keys unchanged), ADA-only collateral.
+  - **Scripts come INLINE from config** (`transfer.scripts` CBOR hex — upstream doesn't document
+    where reference scripts live) and are HASH-VERIFIED against their credentials; the transfer-logic
+    script must match the LIVE registry node's credential. Postconditions on the built tx (node_idx
+    position, both zero-withdrawals, tokens only at programmable addresses) throw before anything is
+    signable.
+  - **Upstream-undocumented assumptions (recorded in the module header — re-verify against a real
+    deployment):** TransferAct=constr 0 / TokenExists=constr 0; base-spend + transfer-logic
+    redeemers = unit constr 0 (validators documented/expected to ignore them); recipient datum =
+    preserved source datum.
+  - **Found + patched buildooor dual-class bug #4:** `TxBody` validated withdrawals against
+    `dist/ledger/TxWithdrawals` (instanceof the WRONG `StakeAddress` copy) — StakeAddress-keyed
+    withdrawals were rejected outright, and the bare-hash fallback silently defaults reward accounts
+    to MAINNET. Same single-line repoint as the three existing patch fixes
+    (`patches/@harmoniclabs+cardano-ledger-ts+0.5.1.patch`, now 4 fixes); the unit test asserts the
+    TESTNET network byte survives a CBOR round-trip.
+  - tests: ✅ `test/cip113Transfer.test.ts` (13) — self-consistent fixture validator world (three
+    distinct always-succeeds V3 scripts): outputs/change routing, ref-input index, withdraw-zero ×2
+    on testnet, stake-key requiredSigner, TransferAct redeemer CBOR, script-data-hash + round-trip,
+    and six refusal paths (wrong-hash script, registry mismatch, insufficient, enterprise recipient,
+    foreign node, missing config). 375 tests; typecheck + lint + build clean.
+  - **remaining (blocked on a live deployment):** an on-chain transfer confirming on preview; the
+    recorded assumptions verified against the real contracts; unregistered-stake-address ledger
+    rejection surfaced distinctly (can't trigger without a chain).
+- [~] **T9.5 — Send flow + approval decode — IMPLEMENTED (2026-07-17), same pending verification.**
+  Dashboard programmable rows now carry a Send button (replacing T9.3's refusal note) → dedicated
+  `ProgrammableSend` overlay (`popup/Dashboard.tsx`): recipient BASE address + quantity → decoded
+  review stating explicitly where tokens land (the recipient's programmable address, shown in full),
+  that the issuer's transfer rules run via two validator invocations, and the fee — never an opaque
+  blob (§1.5). Approve reuses the id-bound pending/approve machinery (`approveSend`), so the signed
+  tx is exactly the one summarized; the stake-key witness derives through the existing generic
+  signer path. Background: `buildProgrammableSend` (`walletHandlers.ts`) — registry resolved fresh,
+  v1 spends only single-asset programmable UTxOs (a mixed UTxO can't leak other tokens to regular
+  change).
+  - **not yet:** dApp-built CIP-113 txs via `signTx` get no special decode (they render as a generic
+    Plutus tx with withdrawals — safe but not narrated); `summary.ts` CIP-113 narration is a
+    follow-up with the on-chain verification.
 
 **Milestone exit:** programmable tokens are visible and safely transferable with informed approval —
 or, pre-audit, visible with plain-send correctly blocked (T9.1–T9.3 alone is a valid stopping point).
