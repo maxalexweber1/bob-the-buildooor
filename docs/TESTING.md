@@ -34,6 +34,16 @@ Empirical proof scripts under `scripts/` validate the buildooor recipes and real
 Confirmed preview tx hashes are recorded in the build history (spend `c8ccca0f…`, mint `3353511e…`,
 ref-script spend `461468ec…`).
 
+**CIP-113 programmable-token transfer (T9.4) — on-chain proof via a self-deployed world.**
+`scripts/cip113-deploy.cjs` deploys a CIP-113-shaped fixture on preview (always-succeeds validators,
+registered script stake creds, a real registry-node + params UTxO, 1000 TEST113 at the wallet's
+programmable address) and emits the `cip113Params` to activate in the wallet;
+`scripts/cip113-transfer.cjs` mirrors `core/cip113/transfer.ts` and submits a real transfer.
+**Confirmed (tx `9d13443c…`): 100 TEST113 moved sender→recipient across programmable addresses
+(1000→900 / 0→100).** Proves the ledger accepts the transfer shape (script spend + both
+withdraw-zero + reference inputs + collateral + phase-2). Caveat: the stand-in validators
+always-succeed, so upstream's real redeemer/datum encodings still need the audited CF contracts.
+
 ## E2E (Playwright, no real network)
 
 `npm run e2e` — builds `dist/` and drives the REAL extension in Chromium (`e2e/`, persistent context

@@ -426,9 +426,22 @@ tokens are invisible; `buildSend()` (`src/core/tx/build.ts`) can't produce the r
     on testnet, stake-key requiredSigner, TransferAct redeemer CBOR, script-data-hash + round-trip,
     and six refusal paths (wrong-hash script, registry mismatch, insufficient, enterprise recipient,
     foreign node, missing config). 375 tests; typecheck + lint + build clean.
-  - **remaining (blocked on a live deployment):** an on-chain transfer confirming on preview; the
-    recorded assumptions verified against the real contracts; unregistered-stake-address ledger
-    rejection surfaced distinctly (can't trigger without a chain).
+  - **ON-CHAIN VERIFIED (2026-07-17) via a SELF-DEPLOYED world on preview.** `scripts/cip113-deploy.cjs`
+    stands up a CIP-113-shaped deployment (always-succeeds V3 scripts for base/global/transfer-logic,
+    the two script stake creds REGISTERED, a real registry-node UTxO with NFT+datum, a params UTxO,
+    and 1000 TEST113 minted to the wallet's programmable address) and prints the `cip113Params` to
+    paste into the wallet. `scripts/cip113-transfer.cjs` then mirrors `transfer.ts` and submits a real
+    transfer — **confirmed on preview (tx `9d13443c…`): 100 TEST113 moved from the sender's
+    programmable address to a different owner's, sender 1000→900, recipient 0→100.** This proves the
+    ledger accepts the whole transfer SHAPE: script-spend of the programmable UTxO, BOTH withdraw-zero
+    invocations against registered script stake creds, registry+params reference inputs, TransferAct
+    redeemer, collateral, phase-2 execution, submit + confirm. (Both scripts live under the gitignored
+    `scripts/`; the deploy needed the `TxBody`/`StakeAddress` withdrawals patch and manual
+    certificate-deposit accounting, both noted in the script.)
+  - **still open (needs the REAL CF contracts, not our stand-in):** the always-succeeds validators
+    accept anything, so the upstream-undocumented redeemer/datum encodings are NOT validated by this
+    proof — re-verify against an audited deployment before real value. Unregistered-stake-address
+    ledger rejection is now understood (the deploy registers the creds precisely to avoid it).
 - [~] **T9.5 — Send flow + approval decode — IMPLEMENTED (2026-07-17), same pending verification.**
   Dashboard programmable rows now carry a Send button (replacing T9.3's refusal note) → dedicated
   `ProgrammableSend` overlay (`popup/Dashboard.tsx`): recipient BASE address + quantity → decoded

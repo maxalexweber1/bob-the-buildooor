@@ -48,3 +48,6 @@ AGENTS.md
 # Playwright e2e artifacts
 test-results/
 playwright-report/
+
+# CIP-113 local deployment artifact (contains preview deployment refs)
+scripts/cip113-params.local.json
