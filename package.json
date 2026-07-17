@@ -52,10 +52,16 @@
     "vite": "8.1.5",
     "vitest": "4.1.10"
   },
-  "comment2": "Supply-chain (T7.1): install scripts are blocked by default via .npmrc (ignore-scripts=true). Only the vetted esbuild native-binary build is allow-listed. After `npm ci`, run `npm run allow-scripts`. NOTE: ignore-scripts also blocks lifecycle/pre-post hooks (postinstall, pretest, …), so patch-package can't auto-run on install — instead it is embedded directly in the `dev`/`build`/`test` commands (idempotent, ~1s) so the patches/ always apply before those flows. To apply patches manually use `npm run patch`. The patch-package dev-tree carries audit advisories but is dev-only — `npm audit --omit=dev` stays clean.",
+  "comment2": "Supply-chain (T7.1): install scripts are blocked by default via .npmrc (ignore-scripts=true). NO package is allow-listed to run install scripts — Vite 8 uses rolldown (prebuilt native binding, no install script), so the former esbuild allow-entry is gone; every @trezor/* transitive native-build dep (protobufjs/stellar-sdk/usb/blake-hash/tiny-secp256k1) is explicitly DENIED (false) since none of it is bundled (Trezor runs popup-side on connect.trezor.io). After `npm ci`, run `npm run allow-scripts`. NOTE: ignore-scripts also blocks lifecycle/pre-post hooks (postinstall, pretest, …), so patch-package can't auto-run on install — instead it is embedded directly in the `dev`/`build`/`test` commands (idempotent, ~1s) so the patches/ always apply before those flows. To apply patches manually use `npm run patch`. The patch-package dev-tree carries audit advisories but is dev-only — `npm audit --omit=dev` stays clean.",
   "lavamoat": {
     "allowScripts": {
-      "vite>esbuild#0.21.5": true
+      "@trezor/connect-webextension>@trezor/connect>@trezor/blockchain-link-utils>@trezor/protobuf>protobufjs#7.4.0": false,
+      "@trezor/connect-webextension>@trezor/connect>@trezor/blockchain-link>@stellar/stellar-sdk#14.2.0": false,
+      "@trezor/connect-webextension>@trezor/connect>@trezor/device-authenticity>@trezor/protobuf>protobufjs#7.4.0": false,
+      "@trezor/connect-webextension>@trezor/connect>@trezor/protobuf>protobufjs#7.5.5": false,
+      "@trezor/connect-webextension>@trezor/connect>@trezor/transport>usb#2.18.0": false,
+      "@trezor/connect-webextension>@trezor/connect>@trezor/utxo-lib>blake-hash#2.0.0": false,
+      "@trezor/connect-webextension>@trezor/connect>@trezor/utxo-lib>tiny-secp256k1#1.1.7": false
     }
   }
 }
