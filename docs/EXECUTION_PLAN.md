@@ -221,3 +221,115 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
   - **Optional (later, behind a flag):** an external `cf-adahandle-resolver` REST endpoint (`GET /api/v1/addresses/by-ada-handle/{handle}`) as an alternative `IHandleResolver` backend. Treat as a **trust boundary** (a compromised resolver redirects funds) — default stays provider-based on-chain resolution; if enabled, still cross-check the on-chain holder. Document in `docs/SECURITY.md`.
   - **done-when:** typing `$<handle>` in Send resolves to the correct current holder on preview/preprod, the resolved address is shown for confirmation, an unminted/forged/ambiguous handle is rejected with a clear message, and `test/handle.test.ts` covers encode (both forms), validation, and the single-holder/policy-guard rules. ✅ Plus `api.experimental.resolveHandle` for dApps, covered by `test/cip30.test.ts` (resolves to hex, no-unlock, invalid→-1, unminted→-1, origin-gated→-3). ✅ **Verified live on preprod** (keyless Koios) via `test/handle.integration.test.ts` — gated by `RUN_INTEGRATION=1`, skipped in default `npm test`; resolves a real root handle to its single holder (cross-checked against `asset_addresses`) and rejects no-holder / never-minted handles.
 
+---
+
+## M9 — CIP-113 Programmable Tokens (DRAFT — assessed 2026-07-17, not scheduled)
+
+Goal: discover, display, and eventually transfer CIP-113 programmable tokens (regulated assets /
+stablecoins with on-chain transfer logic — [CIP-0113 PR #444](https://github.com/cardano-foundation/CIPs/pull/444),
+[CF reference impl + integration guides](https://github.com/cardano-foundation/cip113-programmable-tokens)).
+
+**⚠️ Gate on upstream maturity.** The Cardano Foundation reference implementation is explicitly
+R&D-grade: *unaudited, not production-ready*; the on-chain contracts (and therefore the
+`programmable_logic_base` script hash and registry policy — the protocol constants everything below
+keys on) may still change. **Build read-only first (T9.1–T9.3); do NOT start transfer support (T9.4–T9.5)
+until a stable, audited deployment with published per-network constants exists.** Re-verify constants
+against the upstream repo at implementation time.
+
+**Why we're incompatible today (assessment 2026-07-17):** CIP-113 tokens do NOT sit at the user's
+base addresses. All holders share ONE script payment credential (the "programmable logic base");
+ownership is the **stake-credential slot**: `addr(programmable_logic_base, owner_credential)`.
+Our discovery (`src/background/discovery.ts`) walks only own payment-key base addresses, so these
+tokens are invisible; `buildSend()` (`src/core/tx/build.ts`) can't produce the required script-spend
++ withdraw-zero transaction. The Plutus machinery to fix that already exists but is dormant/test-only
+(`src/core/tx/plutusBuild.ts`, T5.3/T5.4) — this milestone is mostly wiring, not new crypto.
+
+- [x] **T9.1 — Protocol constants + registry client (read-only, framework-free). ✅ (2026-07-17)**
+  Registry = on-chain **sorted linked list** of RegistryNode UTxOs: `findRegistryNode(policyId)` /
+  `isProgrammablePolicy(policyId)` scan the registry address and return the node's
+  `{transferLogicScript, thirdPartyTransferLogicScript, …}` credentials + the node's CURRENT utxoRef.
+  - files (as built): `src/core/cip113/params.ts` (constants — instead of the planned
+    `shared/constants.ts`, keeping cip113 self-contained in core), `src/core/cip113/registry.ts`,
+    `src/core/cip113/address.ts`. All pure; the chain read is injected as a structural
+    `RegistryLookup` (same decoupling as `core/handle.ts`).
+  - **Constants:** `BUILTIN_CIP113_PARAMS` ships EMPTY (no audited deployment exists); per-network
+    params come from the validated settings override `WalletSettings.cip113Params`
+    (`{programmableLogicBase, registryAddress, registryNodePolicyId}`) — a developer/experiment knob,
+    no Settings UI. Validation rejects bad hex and cross-network registry addresses (trust-no-input).
+  - **NFT = authenticity (anti-spoof):** the registry address is public, so a node only counts if its
+    UTxO holds a token under `registryNodePolicyId` whose asset name equals the datum `key` (upstream
+    invariant). A forged datum without the NFT is ignored — unit-tested.
+  - **Never cached:** node utxoRefs resolve fresh per call (upstream pitfall recorded in the module
+    header); datum decoder is tolerant (foreign shapes → null, never a throw on chain data).
+  - **Enabler:** providers fetched inline datums but dropped them — `toUtxo` (provider `mappers.ts`)
+    now maps `inline_datum`/`data_hash` → `resolved.datum` (Blockfrost getUtxos+resolveUtxos, Koios
+    `_extended` rows; unparseable datum → dropped, not fatal). Ogmios/Kupo still datum-less (Kupo
+    needs a separate `/datums/{hash}` fetch — deferred until a CIP-113 flow needs that stack).
+  - done-when: ✅ `test/cip113.test.ts` (20 cases: params validation, address header/round-trip,
+    7-field + minimal + origin-node decode, malformed-shape nulls, NFT-auth lookup incl. forged/
+    mismatched/wrong-policy spoofs, datum mapping). 344 tests; typecheck + lint + build clean.
+    **remaining (blocked upstream):** live preview lookup behind `RUN_INTEGRATION=1` — impossible
+    until a public reference deployment publishes constants.
+- [x] **T9.2 — Discovery: see programmable-token balances. ✅ (2026-07-17)**
+  `overview()` (`walletHandlers.ts`) now computes `addr(programmable_logic_base, ownerCred)` for BOTH
+  owner conventions — stake key hash (preferred) and payment key `0/0` hash (enterprise variant per
+  the integration guide) — via `ownProgrammableAddresses()`, queries them with the existing
+  `collectUtxos`, and returns the aggregate as `WalletOverview.programmable` (a SEPARATE
+  `WalletBalance`, never merged into `balance`). Skipped when no params are configured for the active
+  network; lookup failures are non-fatal (warn + omit — an experimental feature must never break the
+  main balance view).
+  - **CIP-30 semantics decision (RECORDED):** programmable-token UTxOs are **excluded from dApp-facing
+    `getBalance`/`getUtxos`/`getCollateral`** and shown only in the popup dashboard. Rationale: they
+    are NOT vkey-spendable; returning them would poison every dApp's coin selection, and
+    `getCollateral` must stay ADA-only/key-spendable. The exclusion is **structural**: the cip30
+    handlers and `buildSend` derive their address set exclusively from the wallet's own base addresses
+    (`collectUtxos` over discovery output) — programmable addresses exist only inside `overview()`'s
+    display path, so there is no code path by which these UTxOs can reach the dApp surface or coin
+    selection. Revisit only if/when a CIP standardizes exposure.
+  - done-when: address computation + both-conventions dedup unit-tested (`test/cip113.test.ts`);
+    live preview balance check blocked on an upstream deployment (see T9.1 remaining).
+- [x] **T9.3 — Display: mark programmable tokens. ✅ (2026-07-17)**
+  Dashboard renders a separate "Programmable tokens" card (CIP-113 badge per asset, reuses the lazy
+  CIP-25/68 name resolution + `AssetDetail` overlay) with an explicit "transfers follow the issuer's
+  on-chain rules and aren't supported from this wallet yet" note. All chain strings render as React
+  text nodes only (§1.8).
+  - files (as built): `src/popup/Dashboard.tsx`, `src/shared/internal.ts` (`WalletOverview.programmable`)
+  - **Send refusal:** satisfied structurally today — the Send flow is ADA-only (`buildSend` takes
+    lovelace, no asset picker) and funds exclusively from base-address UTxOs, so a programmable token
+    cannot be selected or spent from Send at all. When Send grows an asset picker, it must source
+    assets from `balance` (never `programmable`) and keep an explicit policy-guard — re-open this task
+    then.
+  - done-when: ✅ badge + section render for a populated `programmable` bundle; plain send untouched.
+- [ ] **T9.4 — Transfer builder (`buildProgrammableTransfer`) — GATED on upstream audit + T1.1-style
+  human sign-off.** Compose from existing `plutusBuild.ts` machinery (2-pass eval, collateral, ref
+  inputs — T5.3/T5.4). Skeleton per the upstream integration guide:
+  - input: sender's UTxO at `addr(programmable_logic_base, senderCred)`;
+  - output: `addr(programmable_logic_base, recipientCred)` + tokens + min-ADA (datum per substandard);
+  - **reference inputs (both mandatory):** protocol-params UTxO + the token's registry-node UTxO
+    (resolved fresh — see T9.1);
+  - **withdraw-zero invocations (both mandatory, tx fails without them):**
+    `(programmable_logic_global, 0)` + `(transfer_logic_script, 0)`;
+  - redeemer on the global: `TransferAct { proofs: [TokenExists { nodeIdx }] }`; a
+    `TokenDoesNotExist` covering-node proof for any non-programmable policy in the same UTxO;
+  - **authorization inverts the normal model:** the required witness is the **owner-credential key**
+    (usually the STAKE key, not the payment key). Signer must witness with the stake XPrv here —
+    touches keyring/signer (§1.1, §1.4): per-call consent, key material transient-scope only, unit
+    tests mandatory (§7 — "touches key handling and signing").
+  - **distinct error for unregistered script stake address** (ledger-level rejection, not a validator
+    error — confusing upstream pitfall; surface it explicitly).
+  - files: `src/core/tx/cip113Build.ts`, `src/background/signer.ts`, `src/core/cip113/registry.ts`
+  - done-when: a reference-impl token transfer confirms on preview; unit tests cover the skeleton
+    (withdrawals present, ref inputs present, redeemer shape, stake-key witness selected).
+- [ ] **T9.5 — Send flow + approval decode (§1.5, anti-blind-sign).** Route programmable tokens
+  (replacing T9.3's refusal) through T9.4. The approval screen must decode the CIP-113 shape into
+  human language — "Transfer <n> <token> to <recipient> (programmable token — issuer transfer rules
+  apply)" — and explicitly explain the withdraw-zero script invocations instead of showing a generic
+  "script interaction". Never an opaque blob.
+  - files: `src/popup/Send.tsx`, `src/core/tx/summary.ts`, `src/popup/Connect.tsx` (dApp-built CIP-113
+    txs get the same decode)
+  - done-when: end-to-end send of a programmable token on preview with a fully decoded approval;
+    a dApp-submitted CIP-113 transfer via `signTx` renders the same summary.
+
+**Milestone exit:** programmable tokens are visible and safely transferable with informed approval —
+or, pre-audit, visible with plain-send correctly blocked (T9.1–T9.3 alone is a valid stopping point).
+

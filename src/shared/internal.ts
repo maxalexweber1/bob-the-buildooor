@@ -46,6 +46,14 @@ export interface WalletOverview {
   usedExternal: number;
   usedChange: number;
   balance: WalletBalance;
+  /**
+   * CIP-113 programmable tokens owned by this wallet's credentials (T9.2) — held at the shared
+   * programmable-logic script address, NOT at our base addresses. Kept separate from `balance` on
+   * purpose: these are not vkey-spendable, must never enter coin selection or the dApp-facing
+   * CIP-30 getBalance/getUtxos, and are display-only until transfer support lands (M9 gate).
+   * Present only when CIP-113 params are configured for the active network.
+   */
+  programmable?: WalletBalance;
 }
 
 export type { WalletSettings };

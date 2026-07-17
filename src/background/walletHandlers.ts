@@ -5,8 +5,10 @@ import type { WalletCommand, WalletStatus, WalletOverview, BuiltTx, SubmitResult
 import { vault } from './vault';
 import { chromeSessionStore, chromeLocalStore } from './storage';
 import { touchAutoLock, cancelAutoLock } from './autolock';
-import { mnemonicToRoot, deriveKey, Role } from '../core/keys';
-import { accountKeys, baseAddress, baseAddressFrom, bech32Network } from '../core/address';
+import { mnemonicToRoot, deriveKey, deriveFromAccount, Role } from '../core/keys';
+import { accountKeys, baseAddress, baseAddressFrom, bech32Network, keyHash28 } from '../core/address';
+import { cip113ParamsFor } from '../core/cip113/params';
+import { ownProgrammableAddresses } from '../core/cip113/address';
 import { aggregateBalance, valueView } from '../core/balance';
 import { buildSend } from '../core/tx/build';
 import { summarizeTx } from '../core/tx/summary';
@@ -53,12 +55,35 @@ async function overview(): Promise<WalletOverview> {
   if (!addresses.includes(receiveAddress)) addresses.push(receiveAddress);
   const utxos = await collectUtxos(provider, addresses);
 
+  // CIP-113 programmable tokens (T9.2): owned via OUR stake (or payment-key) credential but held at
+  // the shared programmable-logic script address — normal discovery can't see them. Opt-in (params
+  // configured for this network, none built-in) and DISPLAY-ONLY: kept out of `balance` so these
+  // UTxOs can never reach coin selection or the dApp-facing CIP-30 surface (M9 exposure decision).
+  let programmable: WalletOverview['programmable'];
+  const cip113 = cip113ParamsFor(s.network, s.cip113Params);
+  if (cip113) {
+    try {
+      const keys = accountKeys(root, 0);
+      const paymentKeyHash = keyHash28(deriveFromAccount(keys.accountKey, Role.External, 0).public().toPubKeyBytes());
+      const progAddrs = ownProgrammableAddresses(
+        cip113,
+        { stakeKeyHash: keys.stakeKeyHash, paymentKeyHash },
+        bech32Network(s.network),
+      );
+      programmable = aggregateBalance(await collectUtxos(provider, progAddrs));
+    } catch (e) {
+      // Non-fatal by design: an experimental CIP-113 lookup must never break the main balance view.
+      console.warn('[cip113] programmable-token lookup failed:', e instanceof Error ? e.name : 'error');
+    }
+  }
+
   const data: WalletOverview = {
     network: s.network,
     receiveAddress,
     usedExternal: external.length,
     usedChange: change.length,
     balance: aggregateBalance(utxos),
+    ...(programmable !== undefined ? { programmable } : {}),
   };
   overviewCache.set(cacheKey, { at: Date.now(), data });
   return data;

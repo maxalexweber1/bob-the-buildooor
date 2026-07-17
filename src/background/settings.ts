@@ -3,6 +3,7 @@
 // env (.env, baked at build); production key entry is a later Settings.tsx task. No secrets stored.
 import { chromeLocalStore, type KeyValueStore } from './storage';
 import type { HistoryBackend, Network, ProviderKind } from './provider/index';
+import type { Cip113Params } from '../core/cip113/params';
 
 export interface WalletSettings {
   network: Network;
@@ -33,6 +34,13 @@ export interface WalletSettings {
    * metadata) are unaffected; only the image fetch is gated.
    */
   nftImages?: boolean | undefined;
+  /**
+   * CIP-113 programmable-token deployment constants per network (T9.1). No built-in deployment
+   * exists (upstream reference impl is unaudited R&D), so programmable-token discovery is OFF unless
+   * this is set — currently a developer/experiment knob without a Settings UI, validated on read
+   * (core/cip113/params.ts). Read-only display only; transfers are gated (EXECUTION_PLAN M9).
+   */
+  cip113Params?: Partial<Record<Network, Cip113Params>> | undefined;
 }
 
 export const SETTINGS_STORAGE_KEY = 'bob:settings';

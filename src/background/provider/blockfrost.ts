@@ -87,7 +87,16 @@ export class BlockfrostProvider implements IChainProvider {
       const rows = await this.get<BfUtxo[]>(`/addresses/${address}/utxos?count=100&page=${page}`, true);
       if (!rows || rows.length === 0) break;
       for (const u of rows) {
-        out.push(toUtxo({ txHash: u.tx_hash, outputIndex: u.output_index, address: u.address ?? address, amount: u.amount }));
+        out.push(
+          toUtxo({
+            txHash: u.tx_hash,
+            outputIndex: u.output_index,
+            address: u.address ?? address,
+            amount: u.amount,
+            datumHash: u.data_hash,
+            inlineDatum: u.inline_datum,
+          }),
+        );
       }
       if (rows.length < 100) break;
     }
@@ -116,7 +125,18 @@ export class BlockfrostProvider implements IChainProvider {
       if (!data) continue;
       for (const idx of indices) {
         const o = data.outputs.find((x) => x.output_index === idx);
-        if (o) out.push(toUtxo({ txHash, outputIndex: idx, address: o.address, amount: o.amount }));
+        if (o) {
+          out.push(
+            toUtxo({
+              txHash,
+              outputIndex: idx,
+              address: o.address,
+              amount: o.amount,
+              datumHash: o.data_hash,
+              inlineDatum: o.inline_datum,
+            }),
+          );
+        }
       }
     }
     return out;

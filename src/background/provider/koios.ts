@@ -6,7 +6,7 @@ import { forceTxOutRef, type CanResolveToUTxO, type GenesisInfos, type ProtocolP
 import { fromHex, toArrayBuffer } from '../../core/crypto/encoding';
 import { type AddressTxRef, type AssetMetadata, type ChainTip, type IChainProvider, type Network, type TxIODetail } from './IChainProvider';
 import { DEFAULT_TIMEOUT_MS, KOIOS_BASE_URL, fetchJson, genesisInfosFor } from './network';
-import { costModelsFromArrays, mergeProtocolParameters, toUtxo, pickString, pickNumber, joinImageUri, type AmountUnit } from './mappers';
+import { costModelsFromArrays, mergeProtocolParameters, toUtxo, pickString, pickNumber, joinImageUri, type AmountUnit, type RawUtxo } from './mappers';
 
 interface KoiosUtxoRow {
   tx_hash: string;
@@ -14,6 +14,9 @@ interface KoiosUtxoRow {
   address?: string;
   value: string; // lovelace
   asset_list?: Array<{ policy_id: string; asset_name: string; quantity: string }> | null;
+  /** `_extended: true` fields — inline datum CBOR (CIP-32) and/or the datum hash. */
+  datum_hash?: string | null;
+  inline_datum?: { bytes: string; value?: unknown } | null;
 }
 interface KoiosCliParams {
   txFeePerByte: number;
@@ -55,12 +58,19 @@ function cip25From721(meta: unknown, policyId: string): Record<string, unknown> 
   return undefined;
 }
 
-function rowToRaw(row: KoiosUtxoRow, fallbackAddress: string): { txHash: string; outputIndex: number; address: string; amount: AmountUnit[] } {
+function rowToRaw(row: KoiosUtxoRow, fallbackAddress: string): RawUtxo {
   const amount: AmountUnit[] = [{ unit: 'lovelace', quantity: row.value }];
   for (const a of row.asset_list ?? []) {
     amount.push({ unit: `${a.policy_id}${a.asset_name}`, quantity: a.quantity });
   }
-  return { txHash: row.tx_hash, outputIndex: row.tx_index, address: row.address ?? fallbackAddress, amount };
+  return {
+    txHash: row.tx_hash,
+    outputIndex: row.tx_index,
+    address: row.address ?? fallbackAddress,
+    amount,
+    datumHash: row.datum_hash,
+    inlineDatum: row.inline_datum?.bytes ?? null,
+  };
 }
 
 export class KoiosProvider implements IChainProvider {

@@ -3,15 +3,19 @@
 // Adapted from ODATANO's backend mappers (the value/ratio edge cases were learned there).
 import {
   Address,
+  Hash32,
   UTxO,
   Value,
+  dataFromCbor,
   defaultProtocolParameters,
   toCostModelV1,
   toCostModelV2,
   toCostModelV3,
   type CostModels,
+  type Data,
   type ProtocolParameters,
 } from '@harmoniclabs/buildooor';
+import { fromHex } from '../../core/crypto/encoding';
 
 /** Blockfrost-style amount entry; also the normalized form we convert Ogmios values into. */
 export interface AmountUnit {
@@ -24,18 +28,44 @@ export interface RawUtxo {
   outputIndex: number;
   address: string;
   amount: AmountUnit[];
-  // datum/refScript are intentionally not mapped yet — needed for Plutus (M5 / T5.4), not for
-  // balance & coin selection. Carried here so the mapper signature is stable when we add them.
-  datumHash?: string | null;
-  inlineDatum?: string | null;
-  scriptRef?: string | null;
+  /** Datum hash (hex), when the output carries a hash-only datum. */
+  datumHash?: string | null | undefined;
+  /** Inline datum as PlutusData CBOR hex (CIP-32) — needed by the CIP-113 registry client (T9.1). */
+  inlineDatum?: string | null | undefined;
+  // refScript is intentionally not mapped yet — script UTxOs reach the builder via resolveUtxos.
+  scriptRef?: string | null | undefined;
 }
 
-/** Build a buildooor `UTxO` (address + value) from a normalized raw UTxO. */
+/** Datum for a mapped UTxO: inline (CIP-32) wins over a hash. Chain data is untrusted — a datum that
+ *  doesn't parse as PlutusData is dropped rather than failing the whole balance/UTxO query. */
+function toDatum(raw: RawUtxo): Hash32 | Data | undefined {
+  if (raw.inlineDatum) {
+    try {
+      return dataFromCbor(fromHex(raw.inlineDatum));
+    } catch {
+      return undefined;
+    }
+  }
+  if (raw.datumHash) {
+    try {
+      return new Hash32(raw.datumHash);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+/** Build a buildooor `UTxO` (address + value + datum) from a normalized raw UTxO. */
 export function toUtxo(raw: RawUtxo): UTxO {
+  const datum = toDatum(raw);
   return new UTxO({
     utxoRef: { id: raw.txHash, index: raw.outputIndex },
-    resolved: { address: Address.fromString(raw.address), value: Value.fromUnits(raw.amount) },
+    resolved: {
+      address: Address.fromString(raw.address),
+      value: Value.fromUnits(raw.amount),
+      ...(datum !== undefined ? { datum } : {}),
+    },
   });
 }
 

@@ -51,7 +51,8 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
     if (!overview) return;
     let cancelled = false;
     void (async () => {
-      for (const a of overview.balance.assets) {
+      // Regular assets + CIP-113 programmable tokens (separate bundle, same display-name resolution).
+      for (const a of [...overview.balance.assets, ...(overview.programmable?.assets ?? [])]) {
         if (fetched.current.has(a.unit)) continue;
         fetched.current.add(a.unit);
         try {
@@ -175,6 +176,39 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
               );
             })}
           </ul>
+        </div>
+      )}
+
+      {overview?.programmable && overview.programmable.assets.length > 0 && (
+        <div style={card}>
+          <div style={{ fontSize: 12, color: '#718096', marginBottom: 6 }}>
+            Programmable tokens ({overview.programmable.assets.length})
+          </div>
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, maxHeight: 160, overflowY: 'auto' }}>
+            {overview.programmable.assets.map((a) => {
+              const name = assetMeta[a.unit]?.name ?? a.assetNameUtf8 ?? `${a.assetNameHex.slice(0, 12)}…`;
+              return (
+                <li
+                  key={a.unit}
+                  style={{ ...assetRow, cursor: 'pointer' }}
+                  onClick={() => setDetail(a)}
+                  title="View details"
+                >
+                  <TokenAvatar policyId={a.policyId} label={name} image={assetImg[a.unit]} />
+                  <span style={{ flex: 1, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {name}
+                    <span style={tokenBadge}>CIP-113</span>
+                  </span>
+                  <span style={{ fontSize: 13, color: '#4a5568' }}>{a.quantity}</span>
+                </li>
+              );
+            })}
+          </ul>
+          <p style={{ fontSize: 11, color: '#718096', margin: '6px 0 0' }}>
+            Held at the CIP-113 programmable-token contract. Transfers follow the issuer’s on-chain
+            rules and aren’t supported from this wallet yet — these tokens can’t be sent with the
+            regular Send flow.
+          </p>
         </div>
       )}
 
