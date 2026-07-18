@@ -21,9 +21,11 @@ Pin the toolbar icon. (For HMR dev instead: `npm run dev`, then load `dist/`.) A
 click the card's **reload ↻** so the new service worker loads; if `host_permissions` changed, Chrome
 re-prompts for the provider host access — accept it (else Koios/self-hosted fetches stay CORS-blocked).
 
-Serve the test dApp (separate terminal):
+Serve the test dApp (separate terminal) — a Vite-bundled page that builds real transactions in-page
+with buildooor and drives the wallet's CIP-30 provider (connect/read/signData + build→sign→submit for
+send/mint/burn):
 ```bash
-npx serve test-dapp    # or: python -m http.server -d test-dapp 8080
+npm run dev:dapp    # → http://localhost:5180
 ```
 
 ---
@@ -64,20 +66,23 @@ npx serve test-dapp    # or: python -m http.server -d test-dapp 8080
 
 ## 4. M4 — CIP-30 dApp connector
 
-Open the served test dApp (e.g. http://localhost:3000) with the wallet **unlocked**.
+Open the test dApp (http://localhost:5180) with the wallet **unlocked** on preview, a funded wallet,
+and a collateral UTxO set (for mint/burn). Every result is logged in the page's Output panel.
 
 | # | Do | Expect | done-when |
 |---|----|--------|-----------|
-| 4.1 | Top of page | "✓ Found bob-the-buildooor (apiVersion 1)" | T0.4/T4.1 |
+| 4.1 | Top of page | "✓ bob-the-buildooor (CIP-30 v1)" | T0.4/T4.1 |
 | 4.2 | **enable()** | A popup window asks to connect, showing the **origin** | **T4.1** |
 | 4.3 | Approve. Click again | No prompt the 2nd time (origin allowlisted) | T4.1 |
 | 4.4 | **getNetworkId** | `0` (preview) | T4.2 |
-| 4.5 | **getUsedAddresses / getChangeAddress / getRewardAddresses** | hex strings | T4.2 |
-| 4.6 | **getBalance / getUtxos** | hex cbor results | T4.2 |
-| 4.7 | **signData** | Approval shows the **decoded message**; result logs `signature=… key=…` | **T4.5** |
-| 4.8 | **signData** while locked, or to a foreign address | Errors with a CIP-30 code (`-2` locked / `2` AddressNotPK) | §9 codes |
-| 4.9 | Build an unsigned tx the wallet owns inputs for (e.g. via Send "Review" → grab the cbor, or a dApp), paste → **signTx** | Approval shows the decoded summary; returns a **witness-set** hex (not a full tx) | **T4.3** |
-| 4.10 | At any signTx/signData prompt, **Reject** (or close the window) | dApp gets `UserDeclined` | §1.4 |
+| 4.5 | **getUsedAddresses / getChangeAddress / getRewardAddresses** | hex / count logged | T4.2 |
+| 4.6 | **getBalance / getUtxos / getCollateral / getExtensions** | non-empty results | T4.2 / T4.6 |
+| 4.7 | **signData (login)** | Approval shows the **decoded message**; logs `sig=… key=…` | **T4.5** |
+| 4.8 | **Send 2 ₳ → self** | dApp builds the tx; approval shows To/amount/fee; approve → tx hash logged, confirms on the explorer | **T4.3** (build→witness→submit) |
+| 4.9 | **Mint 100 TESTDAPP** | Approval decodes a **mint** of 100 under an always-succeeds policy; approve → confirms; the token appears in the dashboard | **T4.3 / M5** |
+| 4.10 | **Burn 50 TESTDAPP** (after minting) | Approval decodes a **burn** (−50); approve → confirms; dashboard balance drops to 50 | **M5** |
+| 4.11 | At any prompt, **Reject** (or close the window) | dApp logs `UserDeclined`; nothing submitted | §1.4 |
+| 4.12 | **signData** while locked, or to a foreign address | Errors with a CIP-30 code (`-2` locked / `2` AddressNotPK) | §9 codes |
 
 ## 5. M5 — Plutus
 

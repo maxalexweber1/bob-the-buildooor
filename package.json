@@ -11,6 +11,8 @@
   "scripts": {
     "patch": "patch-package",
     "dev": "patch-package && vite",
+    "dev:dapp": "patch-package && vite --config vite.dapp.config.ts",
+    "build:dapp": "patch-package && vite build --config vite.dapp.config.ts",
     "build": "patch-package && tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
@@ -20,7 +22,7 @@
     "test:watch": "patch-package && vitest",
     "allow-scripts": "allow-scripts run",
     "postinstall": "patch-package",
-    "e2e": "npm run build && playwright test"
+    "e2e": "npm run build && npm run build:dapp && playwright test"
   },
   "comment": "Exact-pinned versions (no ^): a key-handling extension minimizes supply-chain drift (CLAUDE.md §2). Bump deliberately. @harmoniclabs/buildooor: bump when the keepRelevant fix (PR#12) ships.",
   "dependencies": {

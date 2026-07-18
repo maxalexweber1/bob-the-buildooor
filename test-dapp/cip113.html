@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>bob-the-buildooor — CIP-113 programmable-token demo</title>
+    <style>
+      body { font-family: system-ui, sans-serif; max-width: 820px; margin: 24px auto; padding: 0 16px; color: #1a202c; }
+      h1 { font-size: 20px; }
+      h1 .badge { font-size: 11px; font-weight: 600; color: #553c9a; background: #faf5ff; border: 1px solid #d6bcfa;
+                  border-radius: 5px; padding: 2px 7px; vertical-align: middle; margin-left: 8px; }
+      h2 { font-size: 12px; color: #4a5568; margin: 18px 0 6px; text-transform: uppercase; letter-spacing: .05em; }
+      button { font-size: 13px; padding: 7px 12px; margin: 3px; border: 1px solid #cbd5e0; border-radius: 6px; background: #fff; cursor: pointer; }
+      button:hover { background: #edf2f7; }
+      button.primary { background: #553c9a; color: #fff; border-color: #553c9a; }
+      button:disabled { opacity: .5; cursor: default; }
+      #status { font-size: 13px; padding: 8px 10px; border-radius: 6px; background: #f7fafc; border: 1px solid #e2e8f0; margin: 8px 0; }
+      #log { font-family: ui-monospace, monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;
+             background: #0b1021; color: #c8d3f5; padding: 12px; border-radius: 8px; min-height: 140px; max-height: 420px; overflow-y: auto; }
+      #log .ok { color: #7ee787; } #log .err { color: #ff7b72; } #log .dim { color: #8b949e; }
+      .muted { color: #718096; font-size: 12px; line-height: 1.5; }
+      .card { border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin: 8px 0; font-size: 13px; }
+      .card code { font-size: 11px; word-break: break-all; }
+      .tokrow { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid #edf2f7; }
+      .tokrow:last-child { border-bottom: none; }
+      .tag { font-size: 10px; font-weight: 600; border-radius: 4px; padding: 1px 6px; }
+      .tag.reg { color: #22543d; background: #f0fff4; border: 1px solid #9ae6b4; }
+      .tag.unreg { color: #742a2a; background: #fff5f5; border: 1px solid #feb2b2; }
+      label { display: block; font-size: 12px; color: #4a5568; margin: 8px 0 2px; }
+      input, select, textarea { width: 100%; box-sizing: border-box; font-size: 13px; padding: 6px 8px;
+                                border: 1px solid #cbd5e0; border-radius: 6px; }
+      textarea { font-family: ui-monospace, monospace; font-size: 12px; }
+      a { color: #553c9a; }
+    </style>
+  </head>
+  <body>
+    <h1>CIP-113 programmable tokens<span class="badge">EXPERIMENTAL · preview</span></h1>
+    <p class="muted">
+      Showcase of <b>programmable tokens</b> (CIP-113): tokens held at a shared <i>script</i> address whose
+      stake credential encodes the owner — every transfer must run the issuer's on-chain rules (two
+      withdraw-zero validator invocations). This page discovers your programmable balance, proves the
+      token's registration against the on-chain registry (NFT-authenticated), builds a real transfer
+      in-page, and has the wallet decode &amp; sign it. Plain native assets:
+      <a href="./index.html">CIP-30 test dApp</a>.
+    </p>
+    <div id="status">Provider: <b id="provider-state">checking…</b> · Params: <b id="params-state">checking…</b></div>
+
+    <h2>1 · Connect</h2>
+    <div><button id="connect" class="primary">enable()</button></div>
+
+    <h2>2 · Your programmable tokens</h2>
+    <div class="card">
+      <div class="muted">Programmable address (shared base script + <i>your</i> stake credential):</div>
+      <code id="prog-addr">— connect first —</code>
+      <div id="tokens" style="margin-top:8px"></div>
+      <button id="refresh" disabled>Refresh balance &amp; registry proof</button>
+    </div>
+
+    <h2>3 · Transfer (runs the issuer's on-chain rules)</h2>
+    <div class="card">
+      <label for="unit">Token</label>
+      <select id="unit" disabled><option>— connect first —</option></select>
+      <label for="recipient">Recipient base address (their stake credential becomes the owner — prefilled with your own for a self-transfer demo)</label>
+      <textarea id="recipient" rows="3" spellcheck="false" disabled></textarea>
+      <div class="muted" id="recipient-prog" style="margin-top:4px"></div>
+      <label for="qty">Quantity</label>
+      <input id="qty" inputmode="numeric" value="1" disabled />
+      <div style="margin-top:8px">
+        <button id="transfer" class="primary" disabled>Build → wallet sign → submit</button>
+      </div>
+    </div>
+
+    <h2>Output</h2>
+    <div id="log"></div>
+
+    <script type="module" src="./cip113.ts"></script>
+  </body>
+</html>

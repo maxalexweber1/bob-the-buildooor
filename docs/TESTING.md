@@ -63,6 +63,11 @@ with `--load-extension`, a fresh profile per test so chrome.storage starts empty
   verified** against the wallet's payment key over the body hash — and dApp `signData` with its
   per-call approval (§1.4), the returned COSE_Sign1 verified against the wallet key and payload.
 
-Still manual: dApp `signTx` (needs a dApp-built tx — covered at the unit layer), hardware-device
-flows, and the visual checklist in `docs/VERIFY.md`.
+- **Test-dApp smoke** (`testdapp.spec.ts`): serves the BUILT test dApp (`dist-dapp/`, from
+  `npm run build:dapp`) from a fake origin so the content script injects the provider, then drives
+  the real harness — provider detection, `enable()` approval, `getBalance` — against the mock chain.
+
+Still manual: hardware-device flows, and the interactive **test dApp** write flows (send/mint/burn),
+which need real preview chain data + a funded wallet with collateral — `npm run dev:dapp` →
+http://localhost:5180, checklist in `docs/VERIFY.md` §4.
 

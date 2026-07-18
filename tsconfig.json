@@ -22,11 +22,7 @@
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
 
-    "types": ["chrome", "vite/client"],
-    "baseUrl": ".",
-    "paths": {
-      "@/*": ["src/*"]
-    }
+    "types": ["chrome", "vite/client"]
   },
-  "include": ["src", "e2e", "manifest.config.ts", "vite.config.ts", "playwright.config.ts"]
+  "include": ["src", "e2e", "test-dapp", "manifest.config.ts", "vite.config.ts", "vite.dapp.config.ts", "playwright.config.ts"]
 }
