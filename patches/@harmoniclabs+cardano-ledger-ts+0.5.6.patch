@@ -1,0 +1,68 @@
+diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/babbage/tx/BabbageTxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/babbage/tx/BabbageTxBody.js
+index 4228ac5..0e5c1e7 100644
+--- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/babbage/tx/BabbageTxBody.js
++++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/babbage/tx/BabbageTxBody.js
+@@ -177,7 +177,11 @@ var BabbageTxBody = /** @class */ (function () {
+         // -------------------------------------- totCollateral -------------------------------------- //
+         if (!(totCollateral === undefined ||
+             (0, ints_1.canBeUInteger)(totCollateral)))
+-            this.totCollateral = (0, ints_2.maybeBigUint)(totCollateral);
++            // PATCH (upstream guard inverted): totCollateral was only assigned when INVALID, so a
++            // valid value was always dropped (breaks Babbage field 17 on parse AND construction).
++                throw new Error("invalid 'totCollateral' field");
++            this.totCollateral = totCollateral === undefined ? undefined :
++                (0, ints_2.maybeBigUint)(totCollateral);
+         // -------------------------------------- reference inputs -------------------------------------- //  
+         if (!(refInputs === undefined ||
+             (Array.isArray(refInputs) &&
+diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/conway/tx/ConwayTxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/conway/tx/ConwayTxBody.js
+index 02ab9eb..4db80e8 100644
+--- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/conway/tx/ConwayTxBody.js
++++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/conway/tx/ConwayTxBody.js
+@@ -189,7 +189,11 @@ var ConwayTxBody = /** @class */ (function () {
+         // -------------------------------------- totCollateral -------------------------------------- //
+         if (!(totCollateral === undefined ||
+             (0, ints_1.canBeUInteger)(totCollateral)))
+-            this.totCollateral = (0, ints_2.maybeBigUint)(totCollateral);
++            // PATCH (upstream guard inverted): totCollateral was only assigned when INVALID, so a
++            // valid value was always dropped (breaks Babbage field 17 on parse AND construction).
++                throw new Error("invalid 'totCollateral' field");
++            this.totCollateral = totCollateral === undefined ? undefined :
++                (0, ints_2.maybeBigUint)(totCollateral);
+         // -------------------------------------- reference inputs -------------------------------------- //  
+         if (!(refInputs === undefined ||
+             (Array.isArray(refInputs) &&
+diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/dijkstra/tx/DijkstraTxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/dijkstra/tx/DijkstraTxBody.js
+index 10dade8..c4338ea 100644
+--- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/dijkstra/tx/DijkstraTxBody.js
++++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/eras/dijkstra/tx/DijkstraTxBody.js
+@@ -183,7 +183,11 @@ var DijkstraTxBody = /** @class */ (function () {
+         // -------------------------------------- totCollateral -------------------------------------- //
+         if (!(totCollateral === undefined ||
+             (0, ints_1.canBeUInteger)(totCollateral)))
+-            this.totCollateral = (0, ints_2.maybeBigUint)(totCollateral);
++            // PATCH (upstream guard inverted): totCollateral was only assigned when INVALID, so a
++            // valid value was always dropped (breaks Babbage field 17 on parse AND construction).
++                throw new Error("invalid 'totCollateral' field");
++            this.totCollateral = totCollateral === undefined ? undefined :
++                (0, ints_2.maybeBigUint)(totCollateral);
+         // -------------------------------------- reference inputs -------------------------------------- //  
+         if (!(refInputs === undefined ||
+             (Array.isArray(refInputs) &&
+diff --git a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
+index 555432a..d33bab7 100644
+--- a/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
++++ b/node_modules/@harmoniclabs/cardano-ledger-ts/dist/tx/body/TxBody.js
+@@ -192,7 +192,11 @@ var TxBody = /** @class */ (function () {
+         // -------------------------------------- totCollateral -------------------------------------- //
+         if (!(totCollateral === undefined ||
+             (0, ints_1.canBeUInteger)(totCollateral)))
+-            this.totCollateral = (0, ints_1.maybeBigUint)(totCollateral);
++            // PATCH (upstream guard inverted): totCollateral was only assigned when INVALID, so a
++            // valid value was always dropped (breaks Babbage field 17 on parse AND construction).
++                throw new Error("invalid 'totCollateral' field");
++            this.totCollateral = totCollateral === undefined ? undefined :
++                (0, ints_1.maybeBigUint)(totCollateral);
+         // -------------------------------------- reference inputs -------------------------------------- //  
+         if (!(refInputs === undefined ||
+             (Array.isArray(refInputs) &&

@@ -24,10 +24,10 @@
     "postinstall": "patch-package",
     "e2e": "npm run build && npm run build:dapp && playwright test"
   },
-  "comment": "Exact-pinned versions (no ^): a key-handling extension minimizes supply-chain drift (CLAUDE.md §2). Bump deliberately. @harmoniclabs/buildooor: bump when the keepRelevant fix (PR#12) ships.",
+  "comment": "Exact-pinned versions (no ^): a key-handling extension minimizes supply-chain drift (CLAUDE.md §2). Bump deliberately. buildooor 0.2.9 ships keepRelevant (PR#12) + cardano-ledger-ts 0.5.6 (Conway certs, aux-data fixes upstreamed; only the totCollateral guard still needs patches/).",
   "dependencies": {
     "@cardano-foundation/ledgerjs-hw-app-cardano": "8.0.0",
-    "@harmoniclabs/buildooor": "0.2.7",
+    "@harmoniclabs/buildooor": "0.2.9",
     "@ledgerhq/hw-transport-webhid": "6.36.0",
     "@scure/bip39": "1.6.0",
     "@trezor/connect-webextension": "9.7.3",
