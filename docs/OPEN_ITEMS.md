@@ -20,8 +20,7 @@ patch is `patches/@harmoniclabs+cardano-ledger-ts+0.5.6.patch` — a single fix 
 | 5 | `AuxiliaryData.fromCborObj` v3-field off-by-one + `toJson` v2/v3 mislabel | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) | ✅ shipped in 0.5.6 | Patch hunk dropped 2026-07-17. |
 | 6 | `totCollateral` guard inverted — valid values silently dropped (now in **4** TxBody copies) | [PR #21](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/21) | **submitted** 2026-07-18 | Carried in `patches/…+0.5.6.patch` until released. Regression: `test/collateral.test.ts` + fork test. |
 | 7 | `TxBody` rejects the package's own exported cert classes (certs dual-class: index exports legacy `dist/ledger/certs`, guard checks `eras/*`) | reported to maintainer (message sent 2026-07-18) | awaiting direction (shims vs structural guards) — offered to PR either | Workaround: build certs via `TxBuilder` (normalizes into the expected copy); pinned in `test/cip30.test.ts`. |
-| 8 | `Tx.signWith` signs **unconditionally** since 0.5.6 (0.5.1 attached only required signers) — silent breaking change | noted in the same report | open | Wallet curates the key set itself: `src/core/tx/conwayKeys.ts` (the safer design regardless). |
-| 9 | buildooor `buildSync` minFee misses the vkey-witness bytes of `requiredSigners` → `FeeTooSmallUTxO` (live: supplied 228189 < expected 230432) | **not yet reported** | open | Worked around by the two-pass fee in `src/core/cip113/transfer.ts`. Report upstream with the live numbers. |
+| 8 | buildooor `buildSync` minFee misses the vkey-witness bytes of `requiredSigners` → `FeeTooSmallUTxO` (live: supplied 228189 < expected 230432) | **not yet reported** | open | Worked around by the two-pass fee in `src/core/cip113/transfer.ts`. Report upstream with the live numbers. |
 
 ### About `patches/@harmoniclabs+cardano-ledger-ts+0.5.6.patch`
 
@@ -31,15 +30,6 @@ fresh `npm ci`, run `npm run patch` once). Contents now: **only item 6** — the
 `throw` in the `totCollateral` guard, in `dist/tx/body/TxBody.js` plus the Babbage/Conway/Dijkstra
 era copies. Delete the whole file when PR #21 ships in a released version.
 
-## Follow-ups (unwind once upstream lands)
-
-- [ ] When PR #21 is released, bump `@harmoniclabs/cardano-ledger-ts` and **delete the patch file**.
-- [ ] Item 7: maintainer picks a direction → open the matching PR (shim files or structural guards).
-- [ ] Item 9: file the buildooor fee-estimation report (numbers + repro are in the git history /
-      `core/cip113/transfer.ts` comment), then drop the two-pass build when fixed.
-- [ ] Aux-data regression tests (item 2 note): submit as a test-only PR from the fork, or delete them there.
-- [ ] `patch-package` runs inline in `dev`/`build`/`test` (not via `postinstall`) because
-      `ignore-scripts=true` (T7.1). Revisit if the supply-chain policy changes.
 
 ## Unfinished tasks (from EXECUTION_PLAN)
 
