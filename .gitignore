@@ -53,3 +53,6 @@ playwright-report/
 scripts/cip113-params.local.json
 
 dist-dapp/
+
+# local upstream bug-report drafts
+docs/upstream-*.md

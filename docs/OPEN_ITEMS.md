@@ -5,64 +5,57 @@ once fixed upstream. Keep entries short; link to the detailed doc where one exis
 
 ## Upstream fixes (`@harmoniclabs/*`)
 
-Items 1–3 currently live in `patches/@harmoniclabs+cardano-ledger-ts+0.5.1.patch` (patch-package);
-item 4 is our own `coinSelect.ts` standing in for buildooor's broken `keepRelevant`. Each should be
-dropped once its upstream fix is released in a version we depend on.
+**2026-07-18 status:** we are on buildooor **0.2.9** / cardano-ledger-ts **0.5.6** (published
+2026-07-17). Items 1–3 + 5 of the old 0.5.1 patch **shipped upstream** (PR #19/#20) and were dropped;
+`keepRelevant` (item 4, PR #12) shipped too, but we keep our own `coinSelect.ts` **by choice** (see
+its header: ADA-only preference for CIP-113, rising per-input fee bar, sorted top-up). The remaining
+patch is `patches/@harmoniclabs+cardano-ledger-ts+0.5.6.patch` — a single fix (item 6) in four files.
 
 | # | Item | Upstream link | Status | Notes |
 |---|------|---------------|--------|-------|
-| 1 | `AuxiliaryData` `TxMetadata` import → `eras/common` (dual-class `instanceof`) | [PR #20](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/20) (`ab312d8`/`4a563f0`) | **merged** 2026-06-26 — awaiting npm publish | Metadata/memo build threw on every tx. See [PR-tx-metadata-import-fix.md](./PR-tx-metadata-import-fix.md). |
-| 2 | `AuxiliaryData` Conway aux_data fields optional (metadata-only parses) | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) (`8c766d7`/`bc95c39`) | **merged** 2026-06-26 — awaiting npm publish | `Tx.fromCbor` rejected metadata-only (CIP-20 / label 674) txs. Guarded by `test/auxDataPatch.test.ts`. |
-| 3 | `TxBody` `Certificate` import → `eras/common` (dual-class) | [PR #20](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/20) (`ab312d8`) | **merged** 2026-06-26 — awaiting npm publish | Conway certs/voting (T6.2). Same dual-class root cause as #1. |
-| 5 | `AuxiliaryData.fromCborObj` off-by-one (`Array(4)`/`i<4`) drops Plutus-v3 aux scripts; `toJson()` maps v2 under the v3 key | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) | **merged** 2026-06-26 — awaiting npm publish | Backported into our patch 2026-06-26 alongside #2 (same PR). v3 aux scripts silently lost on decode; `toJson` mislabel. |
-| 4 | buildooor `keepRelevant` over-selects (every UTxO → no ADA-only collateral) | [PR #12](https://github.com/HarmonicLabs/buildooor/pull/12) | submitted | Worked around by our own `src/core/tx/coinSelect.ts` (T3.1). |
+| 1 | `AuxiliaryData` `TxMetadata` import → `eras/common` (dual-class) | [PR #20](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/20) | ✅ shipped in 0.5.6 | Patch hunk dropped 2026-07-17. |
+| 2 | `AuxiliaryData` Conway aux_data fields optional | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) | ✅ shipped in 0.5.6 | Guarded by `test/auxDataPatch.test.ts`. Regression tests not upstream yet (candidate test-only PR, sitting in the fork untracked). |
+| 3 | `TxBody` `Certificate` import → `eras/common` (dual-class) | [PR #20](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/20) | ✅ shipped in 0.5.6 | Conway certs recognized; T6.2 verified on-chain (see below). |
+| 4 | buildooor `keepRelevant` over-selects | [PR #12](https://github.com/HarmonicLabs/buildooor/pull/12) | ✅ shipped in 0.2.9 | We keep `src/core/tx/coinSelect.ts` deliberately — decision recorded in its header comment. |
+| 5 | `AuxiliaryData.fromCborObj` v3-field off-by-one + `toJson` v2/v3 mislabel | [PR #19](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/19) | ✅ shipped in 0.5.6 | Patch hunk dropped 2026-07-17. |
+| 6 | `totCollateral` guard inverted — valid values silently dropped (now in **4** TxBody copies) | [PR #21](https://github.com/HarmonicLabs/cardano-ledger-ts/pull/21) | **submitted** 2026-07-18 | Carried in `patches/…+0.5.6.patch` until released. Regression: `test/collateral.test.ts` + fork test. |
+| 7 | `TxBody` rejects the package's own exported cert classes (certs dual-class: index exports legacy `dist/ledger/certs`, guard checks `eras/*`) | reported to maintainer (message sent 2026-07-18) | awaiting direction (shims vs structural guards) — offered to PR either | Workaround: build certs via `TxBuilder` (normalizes into the expected copy); pinned in `test/cip30.test.ts`. |
+| 8 | `Tx.signWith` signs **unconditionally** since 0.5.6 (0.5.1 attached only required signers) — silent breaking change | noted in the same report | open | Wallet curates the key set itself: `src/core/tx/conwayKeys.ts` (the safer design regardless). |
+| 9 | buildooor `buildSync` minFee misses the vkey-witness bytes of `requiredSigners` → `FeeTooSmallUTxO` (live: supplied 228189 < expected 230432) | **not yet reported** | open | Worked around by the two-pass fee in `src/core/cip113/transfer.ts`. Report upstream with the live numbers. |
 
-### About `patches/@harmoniclabs+cardano-ledger-ts+0.5.1.patch`
+### About `patches/@harmoniclabs+cardano-ledger-ts+0.5.6.patch`
 
-We do **not** edit our own source for items 1–3 — the bug is in the third-party dependency, so we patch
-its *installed* files via [`patch-package`](https://github.com/ds300/patch-package):
-
-- **What it patches.** The shipped, compiled `.js` inside `node_modules/@harmoniclabs/cardano-ledger-ts/dist/…`
-  (not a `.ts` — the library only ships built JS). Editing `node_modules/` directly would be lost on the
-  next `npm install`; the checked-in `.patch` file is what makes the fix reproducible for CI and every dev.
-- **Filename = target + version.** `@harmoniclabs+cardano-ledger-ts` + `+0.5.1` → the patch only applies to
-  exactly that version (a guard against silently mis-applying to a different release).
-- **Contents.** Five fork-sourced fixes, all minimal: (1) `AuxiliaryData` `TxMetadata` `require()` repoint,
-  (2) `AuxiliaryData.fromCborObj` metadata-only precondition relax, (3) `TxBody` `Certificate` `require()`
-  repoint, (5a) `fromCborObj` field-array off-by-one `Array(4)/i<4` → `Array(5)/i<5` (read the Plutus-v3
-  field), (5b) `toJson()` `plutusV3Scripts` mapping `this.plutusV3Scripts` (was `plutusV2Scripts`). (5a/5b
-  are the rest of upstream PR #19, backported 2026-06-26.) See the table above for the matching upstream refs.
-- **How it's applied.** `patch-package` is invoked inline at the start of the `dev` / `build` / `test`
-  scripts (idempotent, ~1 s). It is **not** wired as a `postinstall` hook because `.npmrc ignore-scripts=true`
-  (supply-chain hardening, T7.1) blocks lifecycle hooks — so after a fresh `npm ci`, run `npm run patch`
-  (or `npm run postinstall`) once to apply it. patch-package is **dev-only** (`npm audit --omit=dev` clean).
-- **When to remove it.** Once each upstream fix is released in a version we depend on, bump the dependency
-  and delete that hunk; drop the whole patch file when all three are gone.
+Same patch-package mechanics as before (compiled `dist/` JS, filename pins the exact version,
+applied inline in `dev`/`build`/`test` because `ignore-scripts=true` blocks `postinstall` — after a
+fresh `npm ci`, run `npm run patch` once). Contents now: **only item 6** — the missing
+`throw` in the `totCollateral` guard, in `dist/tx/body/TxBody.js` plus the Babbage/Conway/Dijkstra
+era copies. Delete the whole file when PR #21 ships in a released version.
 
 ## Follow-ups (unwind once upstream lands)
 
-- [ ] Items 1–3 + 5 are **merged on `main`** (PR #19 + PR #20, 2026-06-26) but **not yet published to npm**
-      (latest is still 0.5.1; no 0.5.2 tag/release). When the fixes ship in a published version, bump
-      `@harmoniclabs/cardano-ledger-ts` and **delete the patch file entirely** (all four hunks are then upstream).
-- [ ] When buildooor #4 lands, revert to its `keepRelevant` and delete `src/core/tx/coinSelect.ts` (T3.1).
+- [ ] When PR #21 is released, bump `@harmoniclabs/cardano-ledger-ts` and **delete the patch file**.
+- [ ] Item 7: maintainer picks a direction → open the matching PR (shim files or structural guards).
+- [ ] Item 9: file the buildooor fee-estimation report (numbers + repro are in the git history /
+      `core/cip113/transfer.ts` comment), then drop the two-pass build when fixed.
+- [ ] Aux-data regression tests (item 2 note): submit as a test-only PR from the fork, or delete them there.
 - [ ] `patch-package` runs inline in `dev`/`build`/`test` (not via `postinstall`) because
       `ignore-scripts=true` (T7.1). Revisit if the supply-chain policy changes.
 
 ## Unfinished tasks (from EXECUTION_PLAN)
 
-Needs hardware / live testnet — can't be completed in this environment:
-
-- [ ] **T6.2 (remaining)** — a Conway vote/delegation tx **confirms on testnet** (needs a live wallet
-      owning the stake cred). Parse + decode + witness already done & tested.
-- [ ] **T6.3 — Ledger (WebHID).** `ledgerjs-hw-app-cardano` + `hw-transport-webhid`; transport outside
-      the SW (popup/offscreen does `HID.requestDevice()`, SW re-binds via `getDevices()`).
-- [ ] **T6.4 — Trezor (Connect, popup mode).** Account import + signing; document the iframe workaround.
+- [x] **T6.2 (remaining)** — ✅ **verified on-chain 2026-07-17**: Conway stake-registration +
+      vote-delegation built, decoded (`summarizeTx`) and signed through the wallet path, confirmed on
+      preview — tx `35806f030bc8a3e42c6c1f03143ee27ef377859d9a794ed0a52adc90ac139ad5`. Signing-key
+      curation pinned by `test/cip30.test.ts` ("NEVER the DRep key").
+- [x] **T7.3 — e2e tests (Playwright).** ✅ 9 specs green (wallet lifecycle, vault-at-rest, dApp
+      enable/reject, send §1.5 CBOR match, signData COSE verify, test-dApp smoke) — `npm run e2e`.
+- [ ] **T6.3 — Ledger (WebHID)** / **T6.4 — Trezor**: code shipped (`f860b31`), but **live device
+      verification still pending** (needs physical hardware).
 
 Deferred (post-v1 / nice-to-have):
 
 - [ ] **T6.5 — CIP-103 bulk signing.** Pure add-on via generic dispatch (T6.1); approval must still
       decode **every** tx in the batch (no batch-blind-sign, §1.5). Implement when a target dApp needs it.
-- [ ] **T7.3 — e2e tests (Playwright).** Unit ✅ + preview proof scripts ✅; e2e pending.
 - [ ] **T7.4 — Firefox port.** Compat audit done; blockers (event-page background, `browser.*`) in `docs/FIREFOX.md`.
 - [ ] **T7.5 — Store submission.** Listing/icons/privacy ✅; screenshots + actual submission deferred.
 - [ ] **NFT images** — IPFS gateway is a hardcoded `ipfs.io` default (could be a setting); no persistent
