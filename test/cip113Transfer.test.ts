@@ -174,6 +174,32 @@ describe('buildProgrammableTransfer (T9.4)', () => {
     ).toBe('2');
   });
 
+  it('selects only the needed ADA-only funding — never sweeps the pool or token UTxOs', () => {
+    // Live regression (preview tx ce7944bb…): passing the whole wallet as fundingUtxos used to
+    // spend EVERYTHING — 7000+ ADA and every unrelated asset consolidated through one Plutus tx.
+    const tokenBundle = new UTxO({
+      utxoRef: { id: 'ab'.repeat(32), index: 0 },
+      resolved: {
+        address: Address.fromString(senderRegularAddr),
+        value: Value.fromUnits([
+          { unit: 'lovelace', quantity: '5000000000' },
+          { unit: 'ab'.repeat(28) + 'aa', quantity: '7' },
+        ]),
+      },
+    });
+    const adaSmall = new UTxO({
+      utxoRef: { id: 'ba'.repeat(32), index: 0 },
+      resolved: { address: Address.fromString(senderRegularAddr), value: Value.lovelaces(20_000_000n) },
+    });
+    const selective = buildProgrammableTransfer(
+      makeParams({ fundingUtxos: [tokenBundle, adaSmall] }),
+    );
+    const inputIds = selective.body.inputs.map((i) => i.utxoRef.toString());
+    expect(inputIds).toContain(`${'ee'.repeat(32)}#0`); // the programmable source
+    expect(inputIds).toContain(`${'ba'.repeat(32)}#0`); // the ADA-only funding it needs
+    expect(inputIds).not.toContain(`${'ab'.repeat(32)}#0`); // the token bundle stays untouched
+  });
+
   it('carries both mandatory reference inputs, registry node at the proof index', () => {
     const refs = (tx.body.refInputs ?? []).map((u) => u.utxoRef.toString());
     expect(refs[0]).toBe(`${'cc'.repeat(32)}#0`);

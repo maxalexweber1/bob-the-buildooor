@@ -44,6 +44,8 @@ import {
   type UTxO,
 } from '@harmoniclabs/buildooor';
 import { fromHex } from '../crypto/encoding';
+import { selectInputs } from '../tx/coinSelect';
+import { valueView } from '../balance';
 import type { Cip113Params, Cip113TransferParams } from './params';
 import type { RegistryNodeRef } from './registry';
 
@@ -114,7 +116,8 @@ export interface ProgrammableTransferParams {
   senderStakeKeyHash: Uint8Array;
   /** ADA-only collateral UTxO from the sender's regular wallet. */
   collateral: UTxO;
-  /** Regular wallet UTxOs funding fee/min-ADA. */
+  /** CANDIDATE pool of regular wallet UTxOs (typically the whole wallet, minus the collateral).
+   *  The builder SELECTS from it — only what fee/min-ADA actually need is spent. */
   fundingUtxos: UTxO[];
   /** Regular wallet change address (ADA only — programmable tokens never route here). */
   changeAddress: string;
@@ -219,15 +222,38 @@ export function buildProgrammableTransfer(p: ProgrammableTransferParams): Tx {
       { unit: p.unit.toLowerCase(), quantity: qty.toString() },
     ]);
 
+  // Funding SELECTION: `fundingUtxos` is a candidate pool — spending it wholesale would consolidate
+  // the entire wallet through one Plutus tx (observed live: a 1-token transfer swept 7000+ ADA and
+  // every other asset into a single change output — privacy loss, every UTxO locked while pending,
+  // inflated fee). Select ADA-only candidates first so no unrelated token ever rides through the
+  // programmable transfer; fall back to token-carrying UTxOs only if the ADA-only pool can't cover.
+  // Needed lovelace beyond what the source UTxOs bring: the programmable outputs' min-ADA (the
+  // selection buffer inside selectInputs covers fee + ADA-change min-ADA).
+  const sourceLovelace = p.sourceUtxos.reduce((s, u) => s + u.resolved.value.lovelaces, 0n);
+  const outputCount = remainder > 0n ? 2n : 1n;
+  const neededLovelace = outputLovelace * outputCount - sourceLovelace;
+  const fundingTarget = { lovelace: neededLovelace > 0n ? neededLovelace : 0n };
+  const adaOnlyCandidates = p.fundingUtxos.filter((u) => valueView(u.resolved.value).assets.length === 0);
+  let funding: UTxO[];
+  try {
+    funding = selectInputs(adaOnlyCandidates, fundingTarget);
+  } catch {
+    try {
+      funding = selectInputs(p.fundingUtxos, fundingTarget); // last resort — pool too poor in ADA-only
+    } catch {
+      throw new Cip113TransferError('insufficient regular wallet funds for fee/min-ADA of the transfer');
+    }
+  }
+
   const tb = new TxBuilder(p.protocolParameters, p.genesisInfos);
-  const tx = tb.buildSync({
+  const buildArgs = {
     inputs: [
       // Script spends: each source UTxO unlocks via the base validator (redeemer ignored upstream).
       ...p.sourceUtxos.map((utxo) => ({
         utxo,
         inputScript: { script: baseScript, redeemer: unitRedeemer() },
       })),
-      ...p.fundingUtxos.map((utxo) => ({ utxo })),
+      ...funding.map((utxo) => ({ utxo })),
     ],
     readonlyRefInputs: refInputs,
     outputs: [
@@ -254,7 +280,18 @@ export function buildProgrammableTransfer(p: ProgrammableTransferParams): Tx {
     requiredSigners: [p.senderStakeKeyHash],
     collaterals: [p.collateral],
     changeAddress: p.changeAddress,
-  });
+  };
+
+  // Two-pass fee: buildooor's minFee estimation does not account for the vkey witnesses that
+  // `requiredSigners` entries will add (observed live on preview: supplied 228189 < expected 230432
+  // → FeeTooSmallUTxO). Build once to get its estimate, then rebuild with an explicit fee that also
+  // covers one full vkey witness (~102 CBOR bytes) per required signer. Slight over-payment
+  // (≤ ~0.005 ADA) is deterministic and beats a node rejection.
+  const draft = tb.buildSync(buildArgs);
+  const witnessBytesPerSigner = 102n;
+  const feePerByte = BigInt(p.protocolParameters.txFeePerByte ?? 44);
+  const fee = draft.body.fee + witnessBytesPerSigner * feePerByte * BigInt(buildArgs.requiredSigners.length);
+  const tx = tb.buildSync({ ...buildArgs, fee });
 
   assertTransferPostconditions(tx, p, refInputs, nodeIdx, transfer);
   return tx;

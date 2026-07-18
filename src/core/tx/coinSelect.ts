@@ -1,8 +1,8 @@
-// Coin selection (EXECUTION_PLAN T3.1). Our OWN selection — buildooor's `keepRelevant` is currently
-// broken: it over-selects (grabs every UTxO), inflating tx size/fee and consolidating native assets
-// into one UTxO (so no ADA-only UTxO remains for collateral). See:
-//   https://github.com/HarmonicLabs/buildooor/pull/12
-// TODO: revert to buildooor's `keepRelevant` once PR #12 is merged & released, then delete this file.
+// Coin selection (EXECUTION_PLAN T3.1). Our OWN selection, kept BY CHOICE: buildooor 0.2.9 fixed
+// `keepRelevant`'s over-selection (our PR #12), but it still (a) uses a fixed 5-ADA headroom instead
+// of a per-input rising fee bar, (b) does not sort its lovelace top-up (more inputs → bigger fee),
+// and (c) has no ADA-only preference — which the CIP-113 funding path relies on so unrelated token
+// bundles never ride through a Plutus tx (see core/cip113/transfer.ts).
 //
 // Strategy: largest-lovelace-first accumulation until the requested value (ADA + every native asset)
 // is covered, plus a buffer for the fee and the min-ADA of the change output. Deterministic.
