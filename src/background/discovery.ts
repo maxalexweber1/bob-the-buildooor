@@ -34,17 +34,22 @@ export async function discoverAddresses(
   // a gap-limit WINDOW per round-trip instead (one full-set scan covers the whole window).
   if (provider.getUtxosForAddresses) return discoverAddressesBatched(addressAt, role, provider, gapLimit);
 
+  // Per-address providers (Blockfrost/Koios): probe a WINDOW of `gapLimit` addresses in PARALLEL per
+  // round instead of one-at-a-time. A fully-unused window means the gap limit is reached; otherwise
+  // resume one past the last used index. Turns ~40 sequential requests into a few parallel rounds
+  // (the popup's balance load was dominated by that serial latency).
   const used: DiscoveredAddress[] = [];
-  let consecutiveUnused = 0;
+  for (let start = 0; start < MAX_SCAN; ) {
+    const end = Math.min(start + gapLimit, MAX_SCAN);
+    const window: DiscoveredAddress[] = [];
+    for (let index = start; index < end; index++) window.push({ index, address: addressAt(index), role });
 
-  for (let index = 0; index < MAX_SCAN && consecutiveUnused < gapLimit; index++) {
-    const address = addressAt(index);
-    if (await provider.isUsed(address)) {
-      used.push({ index, address, role });
-      consecutiveUnused = 0;
-    } else {
-      consecutiveUnused++;
-    }
+    const usedFlags = await Promise.all(window.map((w) => provider.isUsed(w.address)));
+    const windowUsed = window.filter((_, i) => usedFlags[i]);
+    const last = windowUsed[windowUsed.length - 1];
+    if (!last) break; // whole window unused → gap-limit reached
+    used.push(...windowUsed);
+    start = last.index + 1;
   }
   return used;
 }

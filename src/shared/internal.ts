@@ -15,6 +15,16 @@ import type { LedgerTxPayload, HwWitness } from '../core/hw/ledgerTx';
 export type { ChainTip, TxSummary, HistoryEntry, PendingApproval, AssetMetadata, ResolvedHandle };
 export type { LedgerTxPayload, HwWitness };
 
+/**
+ * chrome.storage.session key of one pending dApp approval record. Shared (not private to
+ * approvals.ts) because the approval popup subscribes to chrome.storage.onChanged on exactly this
+ * key to learn when the background finishes decoding a tx (spinner → summary). Both sides are
+ * privileged contexts; the record itself never contains key material.
+ */
+export function approvalStorageKey(reqId: string): string {
+  return `bob:pendingApproval:${reqId}`;
+}
+
 /** A paired hardware account as shown to the UI (the xpub itself stays in the background store). */
 export interface HwAccountView {
   id: string;

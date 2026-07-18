@@ -1,7 +1,8 @@
 // Local signer (EXECUTION_PLAN T3.2). Runs ONLY in the privileged background, only after the user
 // approved the decoded summary (CLAUDE.md §1.4). Adds vkey witnesses to an unsigned tx and returns
-// the signed CBOR. buildooor's `signWith` adds a witness only for keys that are required signers, so
-// passing the precise input-owner keys is sufficient (and extra keys would be harmless).
+// the signed CBOR. CAUTION: ledger-ts 0.5.6's `signWith` signs with EVERY key it is handed (0.5.1
+// filtered to required signers) — callers must pass a curated key set: input-owner keys plus
+// conwayRequiredKeyHashes-matched stake/DRep keys, never "offer everything".
 import { Tx, TxWitnessSet, type XPrv } from '@harmoniclabs/buildooor';
 import { toHex } from '../core/crypto/encoding';
 

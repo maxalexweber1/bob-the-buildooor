@@ -27,6 +27,7 @@ import { signTxCbor } from './signer';
 import { toHex } from '../core/crypto/encoding';
 import { settings } from './settings';
 import { getProvider, clearProviderCache } from './walletProvider';
+import { clearCip30DiscoveryCache } from './cip30/handlers';
 import { discoverChain, nextReceiveIndex } from './discovery';
 import { getPendingApproval, respondApproval } from './dapp/approvals';
 import { fetchAssetImage } from './assetImage';
@@ -515,6 +516,7 @@ async function finishHwSubmit(pending: PendingHwTx, deviceTxHashHex: string, wit
 
   await chromeSessionStore.remove(HW_PENDING_KEY);
   overviewCache.clear(); // balance changed
+  clearCip30DiscoveryCache(); // change output may have used a fresh address
   return { txHash };
 }
 
@@ -555,6 +557,7 @@ async function approveSendTx(id: string): Promise<SubmitResult> {
 
   await chromeSessionStore.remove(PENDING_KEY);
   overviewCache.clear(); // balance changed
+  clearCip30DiscoveryCache(); // change output may have used a fresh address
   return { txHash };
 }
 
@@ -600,6 +603,7 @@ export async function handleWalletCommand(command: WalletCommand): Promise<unkno
       const next = await settings.update(command.patch);
       clearProviderCache();
       overviewCache.clear();
+      clearCip30DiscoveryCache();
       return next;
     }
 

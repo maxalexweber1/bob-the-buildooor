@@ -119,27 +119,33 @@ export class BlockfrostProvider implements IChainProvider {
       list.push(r.index);
       byTx.set(id, list);
     }
-    const out: UTxO[] = [];
-    for (const [txHash, indices] of byTx) {
-      const data = await this.get<BfTxUtxos>(`/txs/${txHash}/utxos`, true);
-      if (!data) continue;
-      for (const idx of indices) {
-        const o = data.outputs.find((x) => x.output_index === idx);
-        if (o) {
-          out.push(
-            toUtxo({
-              txHash,
-              outputIndex: idx,
-              address: o.address,
-              amount: o.amount,
-              datumHash: o.data_hash,
-              inlineDatum: o.inline_datum,
-            }),
-          );
+    // One round trip per distinct source tx, all in flight at once (they were serial before, which
+    // dominated signTx approval latency for multi-input txs). Promise.all preserves input order, so
+    // the flattened result keeps the per-tx grouping deterministic.
+    const perTx = await Promise.all(
+      [...byTx].map(async ([txHash, indices]) => {
+        const data = await this.get<BfTxUtxos>(`/txs/${txHash}/utxos`, true);
+        if (!data) return [];
+        const utxos: UTxO[] = [];
+        for (const idx of indices) {
+          const o = data.outputs.find((x) => x.output_index === idx);
+          if (o) {
+            utxos.push(
+              toUtxo({
+                txHash,
+                outputIndex: idx,
+                address: o.address,
+                amount: o.amount,
+                datumHash: o.data_hash,
+                inlineDatum: o.inline_datum,
+              }),
+            );
+          }
         }
-      }
-    }
-    return out;
+        return utxos;
+      }),
+    );
+    return perTx.flat();
   }
 
   async getProtocolParameters(): Promise<ProtocolParameters> {

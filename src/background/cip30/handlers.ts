@@ -6,7 +6,7 @@
 //   - signTx (witness-set only) and signData (CIP-8 COSE) are per-call approval-gated (T4.3/T4.5).
 import { Address, StakeAddress, Tx, Value, type UTxO, type XPrv } from '@harmoniclabs/buildooor';
 import { allowlist } from '../dapp/allowlist';
-import { requestApproval } from '../dapp/approvals';
+import { requestApproval, openApproval, setApprovalPayload, cancelApproval } from '../dapp/approvals';
 import {
   apiError,
   refused,
@@ -35,21 +35,57 @@ import {
   stakePublicKey,
   keyHash28,
   type AccountKeys,
+  type PaymentRole,
 } from '../../core/address';
 import { summarizeTx } from '../../core/tx/summary';
+import { conwayRequiredKeyHashes } from '../../core/tx/conwayKeys';
 import { verifyTxOnNode } from '../../core/tx/plutusBuild';
 import { valueView } from '../../core/balance';
 import { buildCoseSign1 } from '../../core/cose/sign';
 import { signTxWitnessSet } from '../signer';
 import type { IChainProvider } from '../provider/index';
 import { ProviderHttpError, ProviderTimeoutError } from '../provider/IChainProvider';
-import { discoverChain, nextReceiveIndex } from '../discovery';
+import { discoverChain, nextReceiveIndex, type DiscoveredAddress } from '../discovery';
 import { toHex, fromHex } from '../../core/crypto/encoding';
 import { resolveHandle, HandleError } from '../../core/handle';
 
 interface OwnerRef {
   role: number;
   index: number;
+}
+
+// ---- Discovery cache ----
+// Gap-limit discovery is the dominant latency of every CIP-30 call (a window of parallel provider
+// probes per chain, twice per call), and dApps fire bursts of calls (enable → getUsedAddresses →
+// getChangeAddress → getUtxos → …) that each redid the walk from scratch. Cache the DISCOVERED
+// ADDRESSES (public on-chain data — no §1 key material) per network+provider for a short TTL,
+// mirroring walletHandlers' overviewCache. The in-flight PROMISE is cached, not the result, so a
+// burst of concurrent calls shares one walk instead of racing N identical ones. Module global →
+// dies with the SW. Invalidated on submitTx (a change address may become used) and settings changes.
+const DISCOVERY_TTL_MS = 10_000;
+const discoveryCache = new Map<string, { at: number; data: Promise<DiscoveredAddress[]> }>();
+
+function discoverChainCached(
+  root: XPrv,
+  s: WalletSettings,
+  role: PaymentRole,
+  provider: IChainProvider,
+): Promise<DiscoveredAddress[]> {
+  const key = `${s.network}:${s.providerKind}:${role}`;
+  const hit = discoveryCache.get(key);
+  if (hit && Date.now() - hit.at < DISCOVERY_TTL_MS) return hit.data;
+  const p = discoverChain(root, s.network, role, provider);
+  discoveryCache.set(key, { at: Date.now(), data: p });
+  // Never cache a failed walk (provider hiccup would otherwise stick for the TTL).
+  p.catch(() => {
+    if (discoveryCache.get(key)?.data === p) discoveryCache.delete(key);
+  });
+  return p;
+}
+
+/** Drop cached discovery (on submit / settings change — the used-address set may be stale). */
+export function clearCip30DiscoveryCache(): void {
+  discoveryCache.clear();
 }
 
 interface Paginate {
@@ -136,15 +172,15 @@ async function authedMethod(method: string, params: unknown[], origin: string): 
 
   switch (method) {
     case 'getUsedAddresses': {
-      const ext = await discoverChain(root, s.network, Role.External, provider);
+      const ext = await discoverChainCached(root, s, Role.External, provider);
       return paginate(ext.map((a) => addrHex(a.address)), params[0] as Paginate | undefined);
     }
     case 'getUnusedAddresses': {
-      const ext = await discoverChain(root, s.network, Role.External, provider);
+      const ext = await discoverChainCached(root, s, Role.External, provider);
       return [addrHex(baseAddressFrom(keys, net, nextReceiveIndex(ext), Role.External))];
     }
     case 'getChangeAddress': {
-      const chg = await discoverChain(root, s.network, Role.Internal, provider);
+      const chg = await discoverChainCached(root, s, Role.Internal, provider);
       return addrHex(baseAddressFrom(keys, net, nextReceiveIndex(chg), Role.Internal));
     }
     case 'getRewardAddresses':
@@ -209,8 +245,11 @@ async function ownerMap(
   keys: AccountKeys,
 ): Promise<Map<string, OwnerRef>> {
   const net = bech32Network(s.network);
-  const ext = await discoverChain(root, s.network, Role.External, provider);
-  const chg = await discoverChain(root, s.network, Role.Internal, provider);
+  // The two chains are independent walks — run them concurrently (each is 1+ provider round trips).
+  const [ext, chg] = await Promise.all([
+    discoverChainCached(root, s, Role.External, provider),
+    discoverChainCached(root, s, Role.Internal, provider),
+  ]);
   const map = new Map<string, OwnerRef>();
   for (const a of ext) map.set(a.address, { role: Role.External, index: a.index });
   for (const a of chg) map.set(a.address, { role: Role.Internal, index: a.index });
@@ -230,22 +269,45 @@ async function signTx(
   txCbor: string,
   partialSign: boolean,
 ): Promise<string> {
-  const tx = Tx.fromCbor(txCbor);
-  // Resolve collateral inputs alongside spending inputs: they are value at risk that MUST show in the
-  // approval, and a wallet-owned collateral input needs this wallet's witness.
-  const resolved = await provider.resolveUtxos(
-    [...tx.body.inputs, ...(tx.body.collateralInputs ?? [])].map((i) => i.utxoRef),
-  );
-  const owners = await ownerMap(root, s, provider, keys);
-  const summary = summarizeTx(tx, resolved, new Set(owners.keys()));
+  const tx = Tx.fromCbor(txCbor); // malformed CBOR throws here — before any window opens
 
-  // Anti-blind-sign for Plutus (CLAUDE.md §1.5): when the tx carries scripts AND we have a node
-  // (Ogmios `evaluateTx`), re-run the scripts on the USER's own node and show the authoritative
-  // ex-units in the approval. Never blocks signing — 'unavailable' if no node / inputs unresolvable.
-  const nodeEval = await verifyTxOnNode(provider, txCbor, tx.witnesses.redeemers?.length ?? 0);
-  if (nodeEval) summary.nodeEval = nodeEval;
+  // The three chain lookups are independent — run them concurrently so their latencies overlap
+  // instead of adding up.
+  //  - resolveUtxos covers collateral inputs alongside spending inputs: they are value at risk that
+  //    MUST show in the approval, and a wallet-owned collateral input needs this wallet's witness.
+  //  - verifyTxOnNode is the anti-blind-sign Plutus cross-check (CLAUDE.md §1.5): when the tx carries
+  //    scripts AND we have a node (Ogmios `evaluateTx`), re-run the scripts on the USER's own node and
+  //    show the authoritative ex-units. Never blocks signing — 'unavailable' if no node / unresolvable.
+  const work = Promise.all([
+    provider.resolveUtxos([...tx.body.inputs, ...(tx.body.collateralInputs ?? [])].map((i) => i.utxoRef)),
+    ownerMap(root, s, provider, keys),
+    verifyTxOnNode(provider, txCbor, tx.witnesses.redeemers?.length ?? 0),
+  ]);
+  work.catch(() => undefined); // handled below — pre-empt a transient unhandled-rejection report
 
-  if (!(await requestApproval('signTx', origin, summary))) {
+  // Open the approval window IMMEDIATELY (payloadPending) while the lookups run: the popup shows a
+  // spinner and keeps the sign button disabled until the decoded summary arrives — approval is only
+  // possible once the summary is rendered (decode-before-sign §1.5; respondApproval enforces it too).
+  const approval = await openApproval('signTx', origin, undefined, { payloadPending: true });
+
+  let resolved: UTxO[];
+  let owners: Map<string, OwnerRef>;
+  let summary: ReturnType<typeof summarizeTx>;
+  try {
+    const [res, own, nodeEval] = await work;
+    resolved = res;
+    owners = own;
+    summary = summarizeTx(tx, resolved, new Set(owners.keys()));
+    if (nodeEval) summary.nodeEval = nodeEval;
+    await setApprovalPayload(approval.reqId, summary);
+  } catch (e) {
+    // Chain work failed → the summary can never be shown, so the prompt can never be approved.
+    // Close the spinner window and surface the error to the dApp.
+    await cancelApproval(approval.reqId);
+    throw e;
+  }
+
+  if (!(await approval.decision)) {
     throw new Cip30Error(TxSignErrorCode.UserDeclined, 'user declined signing');
   }
 
@@ -279,15 +341,18 @@ async function signTx(
   }
   const signingKeys = [...signerRefs.values()].map((o) => deriveKey(root, 0, o.role, o.index));
 
-  // Conway (CIP-95): certificates, governance actions and reward withdrawals are authorized by the
-  // STAKE (…/2/0) and DRep (…/3/0) keys, not a payment key. Offer them when the tx contains such
-  // components — buildooor's signWith only adds a witness for keys the tx actually requires (T6.2).
-  // NOTE: this path is implemented but UNVERIFIED on-chain: the installed buildooor's tx layer does
-  // not yet recognize Conway governance certs (`isCertificate(CertVoteDeleg)` is false), so a vote-
-  // delegation/DRep tx can't be built or round-tripped to test it here. Revisit when buildooor adds
-  // Conway-governance-cert support (track alongside the keepRelevant PR).
-  if (summary.flags.certificates || summary.flags.governance || summary.withdrawals.length > 0) {
-    signingKeys.push(deriveKey(root, 0, Role.Staking, 0), deriveKey(root, 0, Role.DRep, 0));
+  // Conway (CIP-95): certificates, governance votes and reward withdrawals are authorized by the
+  // STAKE (…/2/0) and DRep (…/3/0) keys, not a payment key. Offer each ONLY when the tx actually
+  // requires that key's hash: ledger-ts 0.5.6's signWith signs with every key it is handed (0.5.1
+  // filtered to required signers), and a wallet must never emit a signature the tx doesn't need.
+  // VERIFIED ON-CHAIN (preview, 2026-07-17): stake-reg + vote-delegation built/decoded/signed via
+  // this path, accepted in tx 35806f030bc8a3e42c6c1f03143ee27ef377859d9a794ed0a52adc90ac139ad5.
+  const conwayNeeded = conwayRequiredKeyHashes(tx);
+  if (conwayNeeded.has(toHex(keys.stakeKeyHash))) {
+    signingKeys.push(deriveKey(root, 0, Role.Staking, 0));
+  }
+  if (conwayNeeded.has(toHex(keyHash28(drepPublicKey(keys))))) {
+    signingKeys.push(deriveKey(root, 0, Role.DRep, 0));
   }
   return signTxWitnessSet(txCbor, signingKeys);
 }
@@ -314,16 +379,34 @@ async function signData(
   } catch {
     throw invalidRequest('signData: malformed address or payload');
   }
-  const owner = (await ownerMap(root, s, provider, keys)).get(address.toString());
-  if (!owner) throw new Cip30Error(DataSignErrorCode.AddressNotPK, 'address is not a key address owned by this wallet');
 
-  return approveThenCoseSign(
-    origin,
-    { address: address.toString(), payloadHex, signerKind: 'payment' },
-    address.toBuffer(),
-    deriveKey(root, 0, owner.role, owner.index),
-    payload,
-  );
+  // Open the prompt IMMEDIATELY: unlike signTx there is nothing to decode — the address and message
+  // are fully known up-front, so decode-before-sign (§1.5) is satisfied from the first frame. The
+  // slow part is only the OWNERSHIP check (gap-limit discovery); run it concurrently and cancel the
+  // prompt if the address turns out not to be ours (→ AddressNotPK, per CIP-30).
+  const work = ownerMap(root, s, provider, keys);
+  work.catch(() => undefined); // handled below — pre-empt a transient unhandled-rejection report
+  const approval = await openApproval('signData', origin, {
+    address: address.toString(),
+    payloadHex,
+    signerKind: 'payment',
+  } satisfies SignDataApprovalPayload);
+
+  let owner: OwnerRef | undefined;
+  try {
+    owner = (await work).get(address.toString());
+  } catch (e) {
+    await cancelApproval(approval.reqId);
+    throw e;
+  }
+  if (!owner) {
+    await cancelApproval(approval.reqId);
+    throw new Cip30Error(DataSignErrorCode.AddressNotPK, 'address is not a key address owned by this wallet');
+  }
+
+  if (!(await approval.decision)) throw new Cip30Error(DataSignErrorCode.UserDeclined, 'user declined');
+  const signingKey = deriveKey(root, 0, owner.role, owner.index);
+  return buildCoseSign1(payload, address.toBuffer(), signingKey.toPrivateKeyBytes(), signingKey.public().toPubKeyBytes());
 }
 
 /**
@@ -485,8 +568,10 @@ async function collectUtxos(
   s: WalletSettings,
   provider: IChainProvider,
 ): Promise<UTxO[]> {
-  const ext = await discoverChain(root, s.network, Role.External, provider);
-  const chg = await discoverChain(root, s.network, Role.Internal, provider);
+  const [ext, chg] = await Promise.all([
+    discoverChainCached(root, s, Role.External, provider),
+    discoverChainCached(root, s, Role.Internal, provider),
+  ]);
   const keys = accountKeys(root, 0);
   const net = bech32Network(s.network);
   const receive = baseAddressFrom(keys, net, nextReceiveIndex(ext), Role.External);
@@ -529,11 +614,18 @@ export function paginate<T>(items: T[], p?: Paginate): T[] {
 
 async function submit(provider: IChainProvider, txHex: string): Promise<string> {
   try {
-    return await provider.submitTx(txHex);
+    const hash = await provider.submitTx(txHex);
+    // The submitted tx may pay change to a previously-unused address → the cached used-address set
+    // is stale. Drop it so the next discovery sees the new state.
+    clearCip30DiscoveryCache();
+    return hash;
   } catch (e) {
     // dApp-facing error info is GENERIC on purpose: raw provider messages
     // can reflect the configured endpoint URL or upstream response bodies to an untrusted page.
-    // Full (sanitized) diagnostics stay in the trusted wallet UI / console paths.
+    // The SANITIZED detail (credential-stripped URL + bounded upstream body — e.g. the node's
+    // ValueNotConserved/BadInputsUTxO reason) goes to the trusted SW console: it is the only place
+    // a developer can see WHY a submit was rejected. No secrets: tx CBOR is public, URLs sanitized.
+    console.warn('[cip30] submitTx rejected:', e instanceof Error ? e.message : e);
     if (e instanceof ProviderTimeoutError) throw txSendFailure('provider timed out');
     if (e instanceof ProviderHttpError) throw txSendFailure('provider rejected transaction');
     throw txSendFailure('submit failed');

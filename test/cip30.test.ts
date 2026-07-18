@@ -21,7 +21,13 @@ const h = vi.hoisted(() => {
     getGenesisInfos: vi.fn(async () => ({})),
     getAssetAddresses: vi.fn(async () => [] as Array<{ address: string; quantity: string }>),
   };
-  return { state, provider };
+  // Counting mock so the discovery-cache tests can assert how many walks actually ran.
+  const discoverChain = vi.fn(async () => [] as unknown[]);
+  // Two-phase approval mocks (signTx opens the window first, then delivers the decoded summary).
+  const openApproval = vi.fn(async () => ({ reqId: 'req-test', decision: Promise.resolve(state.approve) }));
+  const setApprovalPayload = vi.fn(async () => undefined);
+  const cancelApproval = vi.fn(async () => undefined);
+  return { state, provider, discoverChain, openApproval, setApprovalPayload, cancelApproval };
 });
 
 vi.mock('../src/background/vault', () => ({
@@ -31,7 +37,7 @@ vi.mock('../src/background/settings', () => ({
   settings: { get: async () => ({ network: h.state.network, providerKind: 'blockfrost' }) },
 }));
 vi.mock('../src/background/autolock', () => ({ touchAutoLock: () => undefined }));
-vi.mock('../src/background/discovery', () => ({ discoverChain: async () => [], nextReceiveIndex: () => 0 }));
+vi.mock('../src/background/discovery', () => ({ discoverChain: h.discoverChain, nextReceiveIndex: () => 0 }));
 vi.mock('../src/background/walletProvider', () => ({ getProvider: async () => h.provider }));
 vi.mock('../src/background/dapp/allowlist', () => ({
   allowlist: {
@@ -48,9 +54,14 @@ vi.mock('../src/background/dapp/allowlist', () => ({
     },
   },
 }));
-vi.mock('../src/background/dapp/approvals', () => ({ requestApproval: async () => h.state.approve }));
+vi.mock('../src/background/dapp/approvals', () => ({
+  requestApproval: async () => h.state.approve,
+  openApproval: h.openApproval,
+  setApprovalPayload: h.setApprovalPayload,
+  cancelApproval: h.cancelApproval,
+}));
 
-import { handleCip30 } from '../src/background/cip30/handlers';
+import { handleCip30, clearCip30DiscoveryCache } from '../src/background/cip30/handlers';
 import {
   UTxO,
   Value,
@@ -59,6 +70,10 @@ import {
   TxBody,
   TxOut,
   TxWitnessSet,
+  CertVoteDeleg,
+  Credential,
+  DRepAlwaysAbstain,
+  TxBuilder,
   defaultProtocolParameters,
   defaultPreviewGenesisInfos,
 } from '@harmoniclabs/buildooor';
@@ -90,6 +105,12 @@ beforeEach(() => {
   h.state.ext = new Map();
   h.state.approve = true;
   h.state.network = 'preview';
+  clearCip30DiscoveryCache(); // the cache is a module global — isolate tests from each other
+  h.discoverChain.mockClear();
+  h.discoverChain.mockResolvedValue([]);
+  h.openApproval.mockClear();
+  h.setApprovalPayload.mockClear();
+  h.cancelApproval.mockClear();
   h.provider.getUtxos.mockClear();
   h.provider.submitTx.mockClear();
   h.provider.getAssetAddresses.mockClear();
@@ -229,6 +250,15 @@ describe('handleCip30 — read methods (T4.2)', () => {
     await expect(
       handleCip30('signData', [foreignAddrHex, toHex(utf8ToBytes('hi'))], ORIGIN),
     ).rejects.toMatchObject({ code: 2 });
+    // Open-first flow: the prompt opened immediately (payload is known up-front) and was cancelled
+    // once the concurrent ownership check failed.
+    expect(h.openApproval).toHaveBeenCalled();
+    expect(h.cancelApproval).toHaveBeenCalledWith('req-test');
+  });
+
+  it('signData: malformed input never opens a prompt', async () => {
+    await expect(handleCip30('signData', [ownAddr, 'zz'], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    expect(h.openApproval).not.toHaveBeenCalled();
   });
 
   it('signData accepts the same owned address as bech32 and as hex (bech32-or-hex rule)', async () => {
@@ -406,6 +436,42 @@ describe('handleCip30 — signTx collateral & required-signer witnessing', () =>
     expect(wits.vkeyWitnesses?.[0]?.vkey.hash.toString()).toBe(ownStakeKeyHash);
   });
 
+  it('a Conway vote-delegation cert is witnessed with the STAKE key — and NEVER the DRep key (T6.2)', async () => {
+    // ledger-ts 0.5.6's signWith signs with every offered key, so the wallet must curate: a
+    // vote-delegation requires payment (input owner) + stake (cert authorizer) — offering the DRep
+    // key too would leak a gratuitous DRep signature on-chain (pinned by the preview proof tx
+    // 35806f03…; this test keeps the selection honest offline).
+    const ownSpend = new UTxO({
+      utxoRef: { id: 'cc'.repeat(32), index: 0 },
+      resolved: { address: ownAddr, value: Value.lovelaces(10_000_000n) },
+    });
+    h.provider.resolveUtxos.mockResolvedValueOnce([ownSpend]);
+    // Built via TxBuilder (not a raw TxBody): the plain TxBody constructor still validates certs
+    // against a divergent class copy and rejects the exported CertVoteDeleg — the builder path is
+    // what real dApps use and what the on-chain proof exercised.
+    const tb = new TxBuilder(
+      { ...defaultProtocolParameters, utxoCostPerByte: 4310 },
+      defaultPreviewGenesisInfos,
+    );
+    const voteTx = tb.buildSync({
+      inputs: [{ utxo: ownSpend }],
+      certificates: [
+        {
+          cert: new CertVoteDeleg({
+            stakeCredential: Credential.keyHash(accountKeys(root, 0).stakeKeyHash),
+            drep: new DRepAlwaysAbstain({}),
+          }),
+        },
+      ],
+      changeAddress: ownAddr,
+    });
+    const witHex = (await handleCip30('signTx', [toHex(voteTx.toCborBytes()), false], ORIGIN)) as string;
+    const hashes = (TxWitnessSet.fromCbor(witHex).vkeyWitnesses ?? []).map((w) => w.vkey.hash.toString());
+    expect(hashes).toHaveLength(2);
+    expect(hashes).toContain(ownPaymentKeyHash);
+    expect(hashes).toContain(ownStakeKeyHash);
+  });
+
   it('foreign inputs, foreign collateral and a foreign requiredSigner → ProofGeneration (1), no witness', async () => {
     const spend = foreignSpend();
     const coll = new UTxO({ utxoRef: { id: 'bb'.repeat(32), index: 1 }, resolved: { address: RECIPIENT, value: Value.lovelaces(5_000_000n) } });
@@ -417,6 +483,36 @@ describe('handleCip30 — signTx collateral & required-signer witnessing', () =>
         ORIGIN,
       ),
     ).rejects.toMatchObject({ code: 1 });
+  });
+});
+
+describe('handleCip30 — signTx two-phase approval (instant window + spinner)', () => {
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+    h.provider.resolveUtxos.mockClear();
+    h.provider.resolveUtxos.mockResolvedValue([]);
+  });
+
+  it('opens the window payload-PENDING, then delivers the decoded summary (decode-before-sign)', async () => {
+    // partialSign — the wallet owning none of the inputs is acceptable for this flow test
+    await handleCip30('signTx', [aTxCbor(), true], ORIGIN);
+    expect(h.openApproval).toHaveBeenCalledWith('signTx', ORIGIN, undefined, { payloadPending: true });
+    const call = h.setApprovalPayload.mock.calls[0] as unknown[] | undefined;
+    expect(call?.[0]).toBe('req-test');
+    expect(call?.[1]).toHaveProperty('outputs'); // a real TxSummary, not a raw CBOR blob
+    expect(h.cancelApproval).not.toHaveBeenCalled();
+  });
+
+  it('chain-work failure closes the prompt (cancelApproval) and surfaces the error to the dApp', async () => {
+    h.provider.resolveUtxos.mockRejectedValueOnce(new Error('resolve failed'));
+    await expect(handleCip30('signTx', [aTxCbor(), false], ORIGIN)).rejects.toThrow('resolve failed');
+    expect(h.cancelApproval).toHaveBeenCalledWith('req-test');
+    expect(h.setApprovalPayload).not.toHaveBeenCalled();
+  });
+
+  it('malformed tx CBOR fails BEFORE any window opens', async () => {
+    await expect(handleCip30('signTx', ['zz-not-cbor', false], ORIGIN)).rejects.toBeTruthy();
+    expect(h.openApproval).not.toHaveBeenCalled();
   });
 });
 
@@ -456,5 +552,65 @@ describe('handleCip30 — experimental.resolveHandle (T8.1, dApp path)', () => {
   it('is origin-gated: a non-enabled origin → Refused (-3)', async () => {
     h.state.allow.delete(ORIGIN);
     await expect(handleCip30('resolveHandle', ['$alice'], ORIGIN)).rejects.toMatchObject({ code: -3 });
+  });
+});
+
+describe('handleCip30 — discovery cache (dApp popup latency)', () => {
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+  });
+
+  it('a burst of read calls shares ONE walk per chain instead of re-discovering each time', async () => {
+    await handleCip30('getUsedAddresses', [undefined], ORIGIN); // external chain
+    await handleCip30('getChangeAddress', [], ORIGIN); // internal chain
+    await handleCip30('getBalance', [], ORIGIN); // both chains — must hit the cache
+    await handleCip30('getUtxos', [undefined, undefined], ORIGIN); // both chains — must hit the cache
+    expect(h.discoverChain).toHaveBeenCalledTimes(2);
+  });
+
+  it('CONCURRENT calls share the in-flight walk (the promise is cached, not the result)', async () => {
+    await Promise.all([
+      handleCip30('getBalance', [], ORIGIN),
+      handleCip30('getUsedAddresses', [undefined], ORIGIN),
+      handleCip30('getChangeAddress', [], ORIGIN),
+    ]);
+    expect(h.discoverChain).toHaveBeenCalledTimes(2);
+  });
+
+  it('submitTx invalidates the cache (the change address may have become used)', async () => {
+    await handleCip30('getBalance', [], ORIGIN);
+    expect(h.discoverChain).toHaveBeenCalledTimes(2);
+    await handleCip30('submitTx', ['deadbeef'], ORIGIN);
+    await handleCip30('getBalance', [], ORIGIN);
+    expect(h.discoverChain).toHaveBeenCalledTimes(4);
+  });
+
+  it('a FAILED walk is never cached — the next call retries', async () => {
+    h.discoverChain.mockRejectedValueOnce(new Error('provider down'));
+    await expect(handleCip30('getUsedAddresses', [undefined], ORIGIN)).rejects.toThrow('provider down');
+    await handleCip30('getUsedAddresses', [undefined], ORIGIN);
+    expect(h.discoverChain).toHaveBeenCalledTimes(2);
+  });
+
+  it('the cache expires after its TTL', async () => {
+    vi.useFakeTimers();
+    try {
+      await handleCip30('getUsedAddresses', [undefined], ORIGIN);
+      expect(h.discoverChain).toHaveBeenCalledTimes(1);
+      await handleCip30('getUsedAddresses', [undefined], ORIGIN);
+      expect(h.discoverChain).toHaveBeenCalledTimes(1); // within TTL → cached
+      vi.advanceTimersByTime(11_000); // past DISCOVERY_TTL_MS
+      await handleCip30('getUsedAddresses', [undefined], ORIGIN);
+      expect(h.discoverChain).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a network switch uses a different cache entry (no stale cross-network addresses)', async () => {
+    await handleCip30('getUsedAddresses', [undefined], ORIGIN);
+    h.state.network = 'mainnet';
+    await handleCip30('getUsedAddresses', [undefined], ORIGIN);
+    expect(h.discoverChain).toHaveBeenCalledTimes(2);
   });
 });

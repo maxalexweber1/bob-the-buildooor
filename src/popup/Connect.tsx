@@ -4,7 +4,7 @@
 // Closing the window counts as a decline.
 import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
-import type { PendingApproval, TxSummary } from '../shared/internal';
+import { approvalStorageKey, type PendingApproval, type TxSummary } from '../shared/internal';
 import { primaryButton } from './App';
 import { formatAda } from './Send';
 import { cip67LabelName } from '../core/cip67';
@@ -16,13 +16,25 @@ export function Connect() {
 
   // Load exactly the request this window was opened for (reqId in the URL hash), never "the latest"
   // pending one — otherwise two overlapping prompts could show/answer each other's request (review #1).
+  // A signTx prompt may open BEFORE its summary is decoded (payloadPending — the window appears
+  // instantly, the background fills the payload in): watch the record's session-storage key and
+  // re-fetch when the background updates it, so the spinner swaps to the summary without polling.
   useEffect(() => {
     const reqId = approvalReqIdFromHash();
     if (!reqId) {
       setPending(null);
       return;
     }
-    wallet.getPendingApproval(reqId).then(setPending).catch(() => setPending(null));
+    const key = approvalStorageKey(reqId);
+    const load = () => wallet.getPendingApproval(reqId).then(setPending).catch(() => setPending(null));
+    const onChanged = (changes: Record<string, chrome.storage.StorageChange>, area: string) => {
+      // Only react to this request's record being UPDATED. Its removal means the request was
+      // answered/cancelled — the window is closing anyway, don't blank the UI mid-close.
+      if (area === 'session' && changes[key]?.newValue !== undefined) void load();
+    };
+    chrome.storage.onChanged.addListener(onChanged);
+    void load(); // subscribe FIRST so an update between fetch and response is never missed
+    return () => chrome.storage.onChanged.removeListener(onChanged);
   }, []);
 
   async function respond(approved: boolean) {
@@ -38,6 +50,11 @@ export function Connect() {
   if (pending === undefined) return <main style={pad}>Loading…</main>;
   if (!pending) return <main style={pad}>No pending request.</main>;
 
+  // Decode-before-sign (§1.5): while the background is still decoding the tx, only a spinner is
+  // shown and the approve button stays DISABLED — there is nothing reviewable to approve yet.
+  // (The background's respondApproval enforces this too; the UI state is not the only gate.)
+  const decoding = pending.payloadPending === true;
+
   return (
     <main style={pad}>
       <h1 style={{ fontSize: 17, margin: '0 0 4px' }}>{title(pending.type)}</h1>
@@ -49,11 +66,17 @@ export function Connect() {
           signature still needs your approval.
         </p>
       )}
-      {pending.type === 'signTx' && <SignTxBody summary={pending.payload as TxSummary} />}
+      {pending.type === 'signTx' &&
+        (decoding ? <DecodingSpinner /> : <SignTxBody summary={pending.payload as TxSummary} />)}
       {pending.type === 'signData' && <SignDataBody payload={pending.payload as { address: string; payloadHex: string }} />}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-        <button type="button" style={{ ...primaryButton, flex: 1 }} disabled={busy} onClick={() => void respond(true)}>
+        <button
+          type="button"
+          style={{ ...primaryButton, flex: 1, ...(decoding ? { background: '#a0aec0', cursor: 'default' } : {}) }}
+          disabled={busy || decoding}
+          onClick={() => void respond(true)}
+        >
           {approveLabel(pending.type)}
         </button>
         <button type="button" style={{ ...primaryButton, flex: 1, background: '#a0aec0' }} disabled={busy} onClick={() => void respond(false)}>
@@ -61,6 +84,29 @@ export function Connect() {
         </button>
       </div>
     </main>
+  );
+}
+
+/** Shown while the background resolves inputs / decodes the tx. Static inline <style> only. */
+function DecodingSpinner() {
+  return (
+    <div style={{ textAlign: 'center', padding: '28px 0' }}>
+      <style>{'@keyframes bobspin { to { transform: rotate(360deg); } }'}</style>
+      <div
+        aria-label="Decoding transaction"
+        style={{
+          width: 28,
+          height: 28,
+          margin: '0 auto 10px',
+          border: '3px solid #e2e8f0',
+          borderTopColor: '#2b6cb0',
+          borderRadius: '50%',
+          animation: 'bobspin 0.8s linear infinite',
+        }}
+      />
+      <p style={hint}>Decoding transaction — resolving inputs on-chain…</p>
+      <p style={hint}>You can review and sign once the full summary is shown.</p>
+    </div>
   );
 }
 

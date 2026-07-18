@@ -5,6 +5,9 @@
 import { describe, it, expect } from 'vitest';
 import {
   requestApproval,
+  openApproval,
+  setApprovalPayload,
+  cancelApproval,
   getPendingApproval,
   respondApproval,
   onApprovalWindowClosed,
@@ -15,10 +18,11 @@ interface CreatedWindow {
   id: number;
 }
 
-/** Install a minimal in-memory chrome mock (storage.session + windows.create + runtime.getURL). */
-function setupChromeMock(): { created: CreatedWindow[] } {
+/** Install a minimal in-memory chrome mock (storage.session + windows + runtime.getURL). */
+function setupChromeMock(): { created: CreatedWindow[]; removed: number[] } {
   const session = new Map<string, unknown>();
   const created: CreatedWindow[] = [];
+  const removed: number[] = [];
   let nextWindowId = 100;
   const mock = {
     storage: {
@@ -41,11 +45,15 @@ function setupChromeMock(): { created: CreatedWindow[] } {
         created.push({ url: opts.url, id });
         return Promise.resolve({ id });
       },
+      remove: (id: number) => {
+        removed.push(id);
+        return Promise.resolve();
+      },
     },
     runtime: { getURL: (p: string) => `chrome-extension://test/${p}` },
   };
   globalThis.chrome = mock as unknown as typeof chrome;
-  return { created };
+  return { created, removed };
 }
 
 /** Extract the reqId the background put in the popup window's URL hash. */
@@ -133,5 +141,68 @@ describe('dApp approvals — concurrent isolation (review #1)', () => {
     setupChromeMock();
     expect(await getPendingApproval('')).toBeNull();
     expect(await getPendingApproval('no-such-req')).toBeNull();
+  });
+});
+
+describe('dApp approvals — two-phase signTx flow (instant window + pending payload, §1.5)', () => {
+  it('openApproval(payloadPending) opens the window immediately with no payload yet', async () => {
+    const { created } = setupChromeMock();
+    const { reqId } = await openApproval('signTx', 'https://dapp.example', undefined, { payloadPending: true });
+    expect(created).toHaveLength(1);
+    const rec = await getPendingApproval(reqId);
+    expect(rec).toMatchObject({ type: 'signTx', origin: 'https://dapp.example', payloadPending: true });
+    expect(rec?.payload).toBeUndefined();
+    await respondApproval(reqId, false); // clean up the waiter
+  });
+
+  it('an APPROVE while the payload is still pending is IGNORED — the blind-sign backstop', async () => {
+    setupChromeMock();
+    const { reqId, decision } = await openApproval('signTx', 'https://dapp.example', undefined, { payloadPending: true });
+
+    await respondApproval(reqId, true); // popup bug / compromised renderer sends an early approve
+    // ignored: the prompt is still pending, the decision unresolved
+    expect(await getPendingApproval(reqId)).not.toBeNull();
+
+    await setApprovalPayload(reqId, { fee: '170000' });
+    const rec = await getPendingApproval(reqId);
+    expect(rec?.payloadPending).toBe(false);
+    expect(rec?.payload).toEqual({ fee: '170000' });
+
+    await respondApproval(reqId, true); // now the summary is reviewable → approval counts
+    await expect(decision).resolves.toBe(true);
+    expect(await getPendingApproval(reqId)).toBeNull();
+  });
+
+  it('a DECLINE while the payload is pending works immediately, and a late payload cannot resurrect the record', async () => {
+    setupChromeMock();
+    const { reqId, decision } = await openApproval('signTx', 'https://dapp.example', undefined, { payloadPending: true });
+
+    await respondApproval(reqId, false);
+    await expect(decision).resolves.toBe(false);
+    expect(await getPendingApproval(reqId)).toBeNull();
+
+    await setApprovalPayload(reqId, { fee: '170000' }); // background finishes decoding afterwards
+    expect(await getPendingApproval(reqId)).toBeNull(); // no orphan record re-created
+  });
+
+  it('cancelApproval closes the window and drops the record (chain work failed)', async () => {
+    const { created, removed } = setupChromeMock();
+    const { reqId } = await openApproval('signTx', 'https://dapp.example', undefined, { payloadPending: true });
+    await cancelApproval(reqId);
+    expect(removed).toEqual([created[0]?.id]);
+    expect(await getPendingApproval(reqId)).toBeNull();
+    // the closed window firing onRemoved afterwards must not blow up or touch other requests
+    onApprovalWindowClosed(created[0]?.id ?? -1);
+  });
+
+  it('requestApproval (connect/signData) still delivers the payload up-front, not pending', async () => {
+    const { created } = setupChromeMock();
+    const p = requestApproval('signData', 'https://dapp.example', { address: 'addr_test1...', payloadHex: '00' });
+    await new Promise((r) => setTimeout(r, 0));
+    const rec = await getPendingApproval(reqIdOf(created[0]?.url ?? ''));
+    expect(rec?.payloadPending).toBe(false);
+    expect(rec?.payload).toMatchObject({ payloadHex: '00' });
+    await respondApproval(rec?.reqId ?? '', true);
+    await expect(p).resolves.toBe(true);
   });
 });

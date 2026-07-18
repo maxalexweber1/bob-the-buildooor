@@ -127,6 +127,39 @@ describe('BlockfrostProvider (mocked fetch)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
+  it('resolveUtxos fetches distinct source txs in PARALLEL and keeps per-tx grouping order', async () => {
+    const TXID2 = 'ff' + TXID.slice(2);
+    const started: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const body = (lovelace: string) => ({
+      outputs: [{ address: ADDR, amount: [{ unit: 'lovelace', quantity: lovelace }], output_index: 0 }],
+    });
+    // Every request blocks on a shared gate: if the per-tx loop were still serial, the second fetch
+    // could never start before the first resolves, and `started` would stay at 1.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        started.push(String(url));
+        await gate;
+        return res(String(url).includes(TXID2) ? body('2000000') : body('1000000'));
+      }),
+    );
+    const p = new BlockfrostProvider('preview', 'preview_key');
+    const resultP = p.resolveUtxos([
+      { id: TXID, index: 0 },
+      { id: TXID2, index: 0 },
+    ]);
+    await vi.waitFor(() => expect(started).toHaveLength(2)); // both in flight before ANY resolved
+    release();
+    const utxos = await resultP;
+    expect(utxos).toHaveLength(2);
+    expect(utxos[0]?.utxoRef.toString()).toBe(`${TXID}#0`);
+    expect(utxos[0]?.resolved.value.lovelaces).toBe(1000000n);
+    expect(utxos[1]?.utxoRef.toString()).toBe(`${TXID2}#0`);
+    expect(utxos[1]?.resolved.value.lovelaces).toBe(2000000n);
+  });
+
   it('maps protocol parameters into a usable TxBuilder', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => res(BF_PARAMS)));
     const p = new BlockfrostProvider('preview', 'preview_key');
