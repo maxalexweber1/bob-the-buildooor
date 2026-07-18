@@ -1,9 +1,9 @@
 // Read-only dashboard (T2.5): live balance, native assets, receive address, provider status, network
 // switch. All chain/asset strings render as React text nodes only (CLAUDE.md §1.8). Privileged context.
-import { useCallback, useEffect, useRef, useState } from 'react';
-import { useWallet } from './store';
+import { useEffect, useRef, useState } from 'react';
+import { useWallet, useWalletData } from './store';
 import { wallet } from '../shared/walletClient';
-import type { WalletOverview, AssetMetadata, BuiltTx } from '../shared/internal';
+import type { AssetMetadata, BuiltTx } from '../shared/internal';
 import type { AssetBalance } from '../core/balance';
 import type { Network } from '../background/provider/IChainProvider';
 import { primaryButton } from './App';
@@ -14,10 +14,14 @@ const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
 
 export function Dashboard({ onSend }: { onSend: () => void }) {
   const { lock } = useWallet();
-  const [overview, setOverview] = useState<WalletOverview | null>(null);
-  const [network, setNetwork] = useState<Network>('preview');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // Stale-while-revalidate: the last loaded overview stays on screen while a refresh runs, so tab
+  // switches and Send→back render instantly instead of flashing "Loading…" (see store.ts).
+  const { network, setNetwork, overview: slice, loadOverview, invalidate } = useWalletData();
+  const overview = slice.data;
+  const loading = slice.refreshing;
+  // Local error only for the network-switch action; load errors live on the slice.
+  const [switchError, setSwitchError] = useState<string | null>(null);
+  const error = switchError ?? slice.error;
   const [copied, setCopied] = useState(false);
   // Lazily-fetched CIP-25/68 display metadata, keyed by asset unit. `fetched` guards against re-querying.
   const [assetMeta, setAssetMeta] = useState<Record<string, AssetMetadata>>({});
@@ -30,22 +34,12 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
   // CIP-113 programmable-token send overlay (T9.5, experimental).
   const [progSend, setProgSend] = useState<AssetBalance | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setNetwork((await wallet.getSettings()).network);
-      setOverview(await wallet.getOverview());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load wallet');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Self-healing load: fires on first mount AND whenever the slice is invalidated (network switch,
+  // submitted tx, provider change) — cached data shows instantly, refreshes run quietly. The
+  // `!error` guard stops a failing provider from causing a refetch loop; Retry/Refresh is manual.
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!slice.data && !slice.refreshing && !slice.error) void loadOverview();
+  }, [slice.data, slice.refreshing, slice.error, loadOverview]);
 
   // Lazily resolve token display names (CIP-25/68) for the visible assets. Sequential on purpose: the
   // background metadata cache is a storage read-modify-write, so parallel calls would clobber writes.
@@ -92,21 +86,18 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
   }, [assetMeta]);
 
   async function changeNetwork(n: Network) {
-    setLoading(true);
-    setError(null);
+    setSwitchError(null);
     try {
       await wallet.updateSettings({ network: n });
       setNetwork(n);
-      // Asset metadata is network-specific — drop what we resolved for the previous network.
+      // Everything cached is network-specific — drop the view data AND the resolved asset metadata.
       fetched.current.clear();
       setAssetMeta({});
       imgFetched.current.clear();
       setAssetImg({});
-      setOverview(await wallet.getOverview());
+      invalidate(); // every mounted view self-reloads for the new network (see load effect)
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to switch network');
-    } finally {
-      setLoading(false);
+      setSwitchError(e instanceof Error ? e.message : 'Failed to switch network');
     }
   }
 
@@ -229,7 +220,7 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
           onClose={() => setProgSend(null)}
           onDone={() => {
             setProgSend(null);
-            void load();
+            invalidate(); // submitted transfer changed the balance — mounted views self-reload
           }}
         />
       )}
@@ -250,7 +241,7 @@ export function Dashboard({ onSend }: { onSend: () => void }) {
         Send
       </button>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button type="button" style={{ ...primaryButton, flex: 1, background: '#4a5568' }} disabled={loading} onClick={() => void load()}>
+        <button type="button" style={{ ...primaryButton, flex: 1, background: '#4a5568' }} disabled={loading} onClick={() => void loadOverview()}>
           {loading ? 'Loading…' : 'Refresh'}
         </button>
         <button type="button" style={{ ...primaryButton, flex: 1, background: '#4a5568' }} onClick={() => void lock()}>

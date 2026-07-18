@@ -3,6 +3,7 @@
 // approve an opaque blob). Approval references the built tx's id, so the signed tx == the one shown.
 import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
+import { useWalletData } from './store';
 import type { BuiltTx, TxStatus, ResolvedHandle } from '../shared/internal';
 import type { AssetBalance } from '../core/balance';
 import { cip67LabelName } from '../core/cip67';
@@ -123,6 +124,9 @@ export function Send({ onBack }: { onBack: () => void }) {
     setError(null);
     try {
       setTxHash((await wallet.approveSend(built.id)).txHash);
+      // Balance/history/UTxOs just changed — drop the popup's cached views so returning to the
+      // dashboard fetches fresh data instead of briefly showing the pre-send balance.
+      useWalletData.getState().invalidate();
     } catch (e) {
       setError(msg(e));
     } finally {

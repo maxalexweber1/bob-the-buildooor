@@ -1,37 +1,26 @@
 // Activity / transaction history (read-only). Aggregates the wallet's net effect per tx over all its
 // HD addresses (computed in core/tx/history). All chain strings render as text nodes (CLAUDE.md §1.8);
 // the explorer link opens cardanoscan in a new tab.
-import { useCallback, useEffect, useState } from 'react';
-import { wallet } from '../shared/walletClient';
+import { useEffect } from 'react';
+import { useWalletData } from './store';
 import type { HistoryEntry } from '../shared/internal';
 import type { Network } from '../background/provider/IChainProvider';
 import { formatAdaSigned, explorerTxUrl, shortId, relativeTime, TokenAvatar, card } from './ui';
 
 export function History() {
-  const [entries, setEntries] = useState<HistoryEntry[] | null>(null);
-  const [network, setNetwork] = useState<Network>('preview');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Stale-while-revalidate (store.ts): last loaded entries render instantly; refresh runs quietly.
+  const { network, history, loadHistory: load } = useWalletData();
+  const entries = history.data;
+  const loading = history.refreshing;
+  const error = history.error;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setNetwork((await wallet.getSettings()).network);
-      setEntries(await wallet.getHistory());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load activity');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Self-healing load: first mount + whenever the slice is invalidated. `!error` stops retry loops.
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!entries && !loading && !error) void load();
+  }, [entries, loading, error, load]);
 
   if (loading && !entries) return <p style={hint}>Loading activity…</p>;
-  if (error) {
+  if (error && !entries) {
     return (
       <div>
         <p style={{ ...hint, color: '#c05621' }}>{error}</p>

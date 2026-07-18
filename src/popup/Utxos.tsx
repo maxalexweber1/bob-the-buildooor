@@ -1,36 +1,23 @@
 // UTxO list (read-only): every unspent output the wallet controls across its HD addresses. Useful for
 // debugging coin selection / collateral. All chain strings render as text nodes (CLAUDE.md §1.8).
-import { useCallback, useEffect, useState } from 'react';
-import { wallet } from '../shared/walletClient';
-import type { UtxoView } from '../shared/internal';
-import type { Network } from '../background/provider/IChainProvider';
+import { useEffect } from 'react';
+import { useWalletData } from './store';
 import { formatAda, explorerTxUrl, shortId, TokenAvatar, card } from './ui';
 
 export function Utxos() {
-  const [utxos, setUtxos] = useState<UtxoView[] | null>(null);
-  const [network, setNetwork] = useState<Network>('preview');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  // Stale-while-revalidate (store.ts): last loaded UTxOs render instantly; refresh runs quietly.
+  const { network, utxos: slice, loadUtxos: load } = useWalletData();
+  const utxos = slice.data;
+  const loading = slice.refreshing;
+  const error = slice.error;
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      setNetwork((await wallet.getSettings()).network);
-      setUtxos(await wallet.listUtxos());
-    } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load UTxOs');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
+  // Self-healing load: first mount + whenever the slice is invalidated. `!error` stops retry loops.
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (!utxos && !loading && !error) void load();
+  }, [utxos, loading, error, load]);
 
   if (loading && !utxos) return <p style={hint}>Loading UTxOs…</p>;
-  if (error) {
+  if (error && !utxos) {
     return (
       <div>
         <p style={{ ...hint, color: '#c05621' }}>{error}</p>

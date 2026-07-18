@@ -8,6 +8,7 @@ import type { Network } from '../background/provider/IChainProvider';
 import type { HistoryBackend, ProviderKind } from '../background/provider/index';
 import { ProviderBadge, card } from './ui';
 import { ensureHostPermission } from '../shared/providerPermissions';
+import { useWalletData } from './store';
 
 const NETWORKS: Network[] = ['preview', 'preprod', 'mainnet'];
 const PROVIDERS: ProviderKind[] = ['blockfrost', 'koios', 'ogmios'];
@@ -47,6 +48,9 @@ export function ProviderSettings() {
     setStatus(testAfter ? 'Testing…' : null);
     try {
       await wallet.updateSettings(s as WalletSettings);
+      // Network/provider changed → every cached view (balance, history, UTxOs) is potentially for
+      // the wrong network. Drop them; the views refetch on next visit.
+      useWalletData.getState().invalidate();
       if (testAfter) {
         const tip = await wallet.pingProvider();
         setStatus(`Connected ✓ tip slot ${tip.slot}, block ${tip.height}`);

@@ -18,20 +18,48 @@ const TABS: Array<{ id: Exclude<View, 'send'>; label: string }> = [
 
 export function Home() {
   const [view, setView] = useState<View>('dashboard');
+  // Keep-alive tabs: a tab mounts on FIRST visit and then stays mounted, hidden via CSS. Switching
+  // tabs must not unmount a view and throw away its loaded state (data, resolved asset names) —
+  // that made every tab switch re-fetch everything. Lazy (visited-only) so opening the popup still
+  // loads just the dashboard, not every view's chain data up-front.
+  const [visited, setVisited] = useState<ReadonlySet<View>>(new Set<View>(['dashboard']));
+
+  const open = (v: View) => {
+    setVisited((prev) => (prev.has(v) ? prev : new Set(prev).add(v)));
+    setView(v);
+  };
 
   if (view === 'send') return <Send onBack={() => setView('dashboard')} />;
+
+  const pane = (v: View): React.CSSProperties => ({ display: view === v ? 'block' : 'none' });
 
   return (
     <div>
       <div style={tabBar}>
         {TABS.map((t) => (
-          <Tab key={t.id} label={t.label} active={view === t.id} onClick={() => setView(t.id)} />
+          <Tab key={t.id} label={t.label} active={view === t.id} onClick={() => open(t.id)} />
         ))}
       </div>
-      {view === 'dashboard' && <Dashboard onSend={() => setView('send')} />}
-      {view === 'activity' && <History />}
-      {view === 'utxos' && <Utxos />}
-      {view === 'provider' && <ProviderSettings />}
+      {visited.has('dashboard') && (
+        <div style={pane('dashboard')}>
+          <Dashboard onSend={() => setView('send')} />
+        </div>
+      )}
+      {visited.has('activity') && (
+        <div style={pane('activity')}>
+          <History />
+        </div>
+      )}
+      {visited.has('utxos') && (
+        <div style={pane('utxos')}>
+          <Utxos />
+        </div>
+      )}
+      {visited.has('provider') && (
+        <div style={pane('provider')}>
+          <ProviderSettings />
+        </div>
+      )}
     </div>
   );
 }
