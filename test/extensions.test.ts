@@ -39,6 +39,20 @@ describe('CIP-30 extension registry (T4.7)', () => {
     ]);
   });
 
+  it('advertises CIP-103 as supported', () => {
+    expect(SUPPORTED_EXTENSION_CIPS).toContain(103);
+    expect(SUPPORTED_EXTENSIONS).toContainEqual({ cip: 103 });
+  });
+
+  it('CIP-103: exactly signTxs + submitTxs, both namespaced', () => {
+    // Verified verbatim against cardano-foundation/CIPs CIP-0103/README.md:
+    //   api.cip103.signTxs(txs) / api.cip103.submitTxs(txs)
+    const cip103 = EXTENSION_REGISTRY.find((e) => e.cip === 103);
+    if (!cip103) throw new Error('CIP-103 missing from registry');
+    expect(cip103.methods.map((m) => m.name).sort()).toEqual(['signTxs', 'submitTxs']);
+    expect(cip103.methods.every((m) => m.placement === 'namespaced')).toBe(true);
+  });
+
   it('extensionWireKey is always cip{N}.{method} regardless of placement', () => {
     expect(extensionWireKey('cip95', 'getRegisteredPubStakeKeys')).toBe('cip95.getRegisteredPubStakeKeys');
   });
@@ -56,6 +70,10 @@ describe('negotiateExtensions (T4.6)', () => {
     expect(negotiateExtensions([{ cip: 95 }])).toEqual([95]);
     expect(negotiateExtensions([{ cip: 999 }])).toEqual([]);
     expect(negotiateExtensions([{ cip: 95 }, { cip: 999 }])).toEqual([95]);
+  });
+
+  it('grants several extensions at once, in requested order', () => {
+    expect(negotiateExtensions([{ cip: 103 }, { cip: 95 }])).toEqual([103, 95]);
   });
 
   it('dedupes repeated requests', () => {

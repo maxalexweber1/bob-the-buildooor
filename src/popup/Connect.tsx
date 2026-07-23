@@ -4,7 +4,13 @@
 // Closing the window counts as a decline.
 import { useEffect, useState } from 'react';
 import { wallet } from '../shared/walletClient';
-import { approvalStorageKey, type PendingApproval, type TxSummary } from '../shared/internal';
+import {
+  approvalStorageKey,
+  type PendingApproval,
+  type TxSummary,
+  type BulkTxItem,
+  type BulkSignApprovalPayload,
+} from '../shared/internal';
 import { primaryButton } from './App';
 import { formatAda } from './Send';
 import { cip67LabelName } from '../core/cip67';
@@ -68,6 +74,8 @@ export function Connect() {
       )}
       {pending.type === 'signTx' &&
         (decoding ? <DecodingSpinner /> : <SignTxBody summary={pending.payload as TxSummary} />)}
+      {pending.type === 'signTxs' &&
+        (decoding ? <DecodingSpinner /> : <SignTxsBody payload={pending.payload as BulkSignApprovalPayload} />)}
       {pending.type === 'signData' && <SignDataBody payload={pending.payload as { address: string; payloadHex: string }} />}
 
       <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
@@ -145,6 +153,59 @@ function SignTxBody({ summary }: { summary: TxSummary }) {
       <ReferenceInputRows refs={summary.referenceInputs} />
       <NodeEvalRows nodeEval={summary.nodeEval} />
       <TxFlagsWarning flags={summary.flags} />
+    </div>
+  );
+}
+
+/**
+ * CIP-103 bulk signing (T6.5): ONE approval for N transactions. Every tx is rendered in full with the
+ * same decoder as a single signTx — a batch is never blind-signed (CLAUDE.md §1.5), and the header
+ * states plainly that approving signs all of them. Chaining and same-input conflicts are labelled per
+ * transaction so "one approval" never hides what the batch actually does.
+ */
+function SignTxsBody({ payload }: { payload: BulkSignApprovalPayload }) {
+  const items = payload?.items ?? [];
+  const totalFee = items.reduce((sum, it) => sum + BigInt(it.summary.fee), 0n).toString();
+  return (
+    <div>
+      <p style={{ ...hint, color: '#9b2c2c', background: '#fff5f5', border: '1px solid #feb2b2', borderRadius: 6, padding: 8 }}>
+        ⚠ This site asks you to sign <b>{items.length} transactions</b> at once. Approving signs{' '}
+        <b>every one of them</b>. Scroll through and review each before you decide.
+      </p>
+      <div style={row}>
+        <span>Total network fees</span>
+        <span style={{ fontWeight: 700 }}>{formatAda(totalFee)} ₳</span>
+      </div>
+      <div style={{ maxHeight: 340, overflowY: 'auto', marginTop: 6 }}>
+        {items.map((it, i) => (
+          <BulkTxCard key={i} item={it} index={i} total={items.length} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BulkTxCard({ item, index, total }: { item: BulkTxItem; index: number; total: number }) {
+  const humanList = (idx: number[]) => idx.map((n) => `#${n + 1}`).join(', ');
+  return (
+    <div style={{ border: '1px solid #e2e8f0', borderRadius: 6, padding: 8, marginBottom: 8 }}>
+      <div style={{ ...lbl, marginTop: 0, fontWeight: 700, color: '#2d3748' }}>
+        Transaction {index + 1} of {total}
+        {item.partialSign ? ' — partial signature' : ''}
+      </div>
+      {item.dependsOn.length > 0 && (
+        <div style={{ ...hint, color: '#2a4365' }}>
+          🔗 Chained: spends output(s) of transaction {humanList(item.dependsOn)} in this batch — it can
+          only settle after those do.
+        </div>
+      )}
+      {item.conflictsWith.length > 0 && (
+        <div style={{ ...hint, color: '#7b341e' }}>
+          ⚠ Spends the same input(s) as transaction {humanList(item.conflictsWith)} — only one of them
+          can ever settle on-chain.
+        </div>
+      )}
+      <SignTxBody summary={item.summary} />
     </div>
   );
 }
@@ -373,10 +434,15 @@ function SignDataBody({ payload }: { payload: { address: string; payloadHex: str
 }
 
 function title(t: PendingApproval['type']): string {
-  return t === 'connect' ? 'Connection request' : t === 'signTx' ? 'Signature request' : 'Sign message';
+  if (t === 'connect') return 'Connection request';
+  if (t === 'signTx') return 'Signature request';
+  if (t === 'signTxs') return 'Bulk signature request';
+  return 'Sign message';
 }
 function approveLabel(t: PendingApproval['type']): string {
-  return t === 'connect' ? 'Connect' : 'Sign';
+  if (t === 'connect') return 'Connect';
+  if (t === 'signTxs') return 'Sign all';
+  return 'Sign';
 }
 
 /** Extract the reqId from the approval window's URL hash, e.g. "#approve?req=<uuid>". */

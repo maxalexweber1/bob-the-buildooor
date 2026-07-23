@@ -83,6 +83,9 @@ and a collateral UTxO set (for mint/burn). Every result is logged in the page's 
 | 4.10 | **Burn 50 TESTDAPP** (after minting) | Approval decodes a **burn** (−50); approve → confirms; dashboard balance drops to 50 | **M5** |
 | 4.11 | At any prompt, **Reject** (or close the window) | dApp logs `UserDeclined`; nothing submitted | §1.4 |
 | 4.12 | **signData** while locked, or to a foreign address | Errors with a CIP-30 code (`-2` locked / `2` AddressNotPK) | §9 codes |
+| 4.13 ✅ | **Sign + submit 2 chained txs** (CIP-103) — *passed on preview 2026-07-23* | **ONE** approval titled "Bulk signature request" listing **both** txs in full; tx #2 is labelled "Chained: spends output(s) of transaction #1" and shows its input resolved (not "unresolved"); approve → both submitted in order, two hashes logged, both confirm | **T6.5** |
+| 4.14 ✅ | **Sign 2 same-input txs** (CIP-103) — *passed on preview 2026-07-23* | Both txs shown; each labelled "Spends the same input(s) as transaction #…"; approve → 2 witness sets logged, nothing submitted | **T6.5** (competing txs are legal input) |
+| 4.15 ✅ | **Reject** at a bulk prompt — *passed on preview 2026-07-23* | dApp logs `UserDeclined` (code 2); **no** witness set for any tx in the batch | §1.4 / CIP-103 all-or-nothing |
 
 ## 5. M5 — Plutus
 

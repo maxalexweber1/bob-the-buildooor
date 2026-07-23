@@ -48,6 +48,11 @@ interface Cip30Api {
   signTx(tx: string, partialSign?: boolean): Promise<string>;
   signData(addr: string, payload: string): Promise<{ signature: string; key: string }>;
   submitTx(tx: string): Promise<string>;
+  /** Present only when `enable({extensions:[{cip:103}]})` granted the bulk-signing extension. */
+  cip103?: {
+    signTxs(txs: { cbor: string; partialSign?: boolean }[]): Promise<string[]>;
+    submitTxs(txs: string[]): Promise<Array<string | { code: number; info: string }>>;
+  };
 }
 interface Cip30Provider {
   apiVersion: string;
@@ -199,6 +204,127 @@ async function doBurn(a: Cip30Api): Promise<string> {
   return signAndSubmit(a, tx);
 }
 
+// ---- CIP-103 bulk signing ------------------------------------------------------------------------
+function requireBulk(a: Cip30Api) {
+  if (!a.cip103) throw new Error('cip103 not granted — enable({extensions:[{cip:103}]}) first');
+  return a.cip103;
+}
+/** Apply a witness set returned by the wallet to the tx it belongs to. */
+function applyWitnesses(tx: Tx, witnessSetHex: string): Tx {
+  for (const vk of TxWitnessSet.fromCbor(witnessSetHex).vkeyWitnesses ?? []) tx.addVKeyWitness(vk);
+  return tx;
+}
+const fmtAda = (lovelace: bigint) => `${(Number(lovelace) / 1e6).toFixed(2)} ₳`;
+
+/**
+ * A wallet-owned output of `tx` big enough to fund the NEXT tx in the chain — spendable before `tx` is
+ * even submitted. Requires a minimum: our coin selection needs `amount + 2 ₳ buffer + 0.1 ₳/input`
+ * (`core/tx/coinSelect.ts`), and when tx#1 pays itself, its payment AND its change output sit on the
+ * same address — picking "the first output at my address" can hand back one that is too small to spend.
+ */
+function chainableOutput(tx: Tx, owner: string, minLovelace: bigint): UTxO {
+  const index = tx.body.outputs.findIndex(
+    (o) => o.address.toString() === owner && o.value.lovelaces >= minLovelace,
+  );
+  const resolved = tx.body.outputs[index];
+  if (!resolved) {
+    const own = tx.body.outputs.filter((o) => o.address.toString() === owner).map((o) => fmtAda(o.value.lovelaces));
+    throw new Error(`tx#1 has no own output ≥ ${fmtAda(minLovelace)} to chain from (has: ${own.join(', ') || 'none'})`);
+  }
+  return new UTxO({ utxoRef: { id: tx.body.hash.toString(), index }, resolved });
+}
+
+/** Label a build failure with the tx it came from — "insufficient funds" alone says nothing in a batch. */
+function build(label: string, fn: () => Tx): Tx {
+  try {
+    return fn();
+  } catch (e) {
+    throw new Error(`${label}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** Total spendable lovelace, for an up-front "you need N ₳" check instead of a build failure. */
+function totalLovelace(utxos: UTxO[]): bigint {
+  return utxos.reduce((sum, u) => sum + u.resolved.value.lovelaces, 0n);
+}
+
+/** tx#2 spends tx#1's change output — the canonical CIP-103 chain: one approval, ordered submit. */
+async function doBulkChained(a: Cip30Api): Promise<string> {
+  const bulk = requireBulk(a);
+  const [change, protocolParameters, genesisInfos, utxos] = await Promise.all([
+    changeAddr(a),
+    protocolParams(),
+    chain.getGenesisInfos(),
+    walletUtxos(a),
+  ]);
+  // tx#1 pays 5 ₳ to itself; tx#2 spends exactly that output. 5 ₳ is not arbitrary: tx#2 sends 1 ₳ and
+  // coin selection wants amount + 2 ₳ buffer + 0.1 ₳/input on TOP, so the chained output must exceed
+  // ~3.1 ₳ to be spendable at all.
+  const CHAIN_HEAD = 5_000_000n;
+  const CHAIN_TAIL = 1_000_000n;
+  const MIN_CHAINABLE = CHAIN_TAIL + 2_100_000n;
+  const need = CHAIN_HEAD + 2_100_000n;
+  const have = totalLovelace(utxos);
+  if (have < need) {
+    throw new Error(`needs ~${fmtAda(need)} — wallet holds ${fmtAda(have)} across ${utxos.length} utxo(s)`);
+  }
+
+  const ctx = { protocolParameters, genesisInfos, changeAddress: change };
+  const tx1 = build('tx#1', () => buildSend({ ...ctx, utxos }, { toAddress: change, lovelace: CHAIN_HEAD }));
+  const chained = chainableOutput(tx1, change, MIN_CHAINABLE);
+  const tx2 = build('tx#2', () =>
+    buildSend({ ...ctx, utxos: [chained] }, { toAddress: change, lovelace: CHAIN_TAIL }),
+  );
+  log(`   tx#2 chains off ${chained.utxoRef.toString().slice(0, 12)}…#${chained.utxoRef.index} (${fmtAda(chained.resolved.value.lovelaces)})`, 'dim');
+
+  log('   2 chained txs built — requesting ONE bulk approval (wallet popup)…', 'dim');
+  const [w1, w2] = await bulk.signTxs([{ cbor: toHex(tx1.toCborBytes()) }, { cbor: toHex(tx2.toCborBytes()) }]);
+  if (!w1 || !w2) throw new Error('expected one witness set per transaction');
+  const signed = [applyWitnesses(tx1, w1), applyWitnesses(tx2, w2)];
+
+  log('   signed — submitting both in order…', 'dim');
+  const results = await bulk.submitTxs(signed.map((t) => toHex(t.toCborBytes())));
+  // Log each result on its OWN line with the FULL hash + explorer link: a truncated hash can't be
+  // looked up, and the whole point of a chained batch is checking both txs actually landed.
+  let ok = 0;
+  results.forEach((r, i) => {
+    if (typeof r === 'string') {
+      ok++;
+      log(`   #${i + 1} ${r}`, 'ok');
+      log(`      https://preview.cardanoscan.io/transaction/${r}`, 'dim');
+    } else {
+      log(`   #${i + 1} ✗ [${r.code}] ${r.info}`, 'err');
+    }
+  });
+  return `${ok}/${results.length} submitted in order`;
+}
+
+/** Two competing spends of the SAME UTxO. Legal to sign in one batch; only one could ever settle —
+ *  so this demo stops at the signature (submitting both would just have the node reject the loser). */
+async function doBulkSameInput(a: Cip30Api): Promise<string> {
+  const bulk = requireBulk(a);
+  const [change, protocolParameters, genesisInfos, utxos] = await Promise.all([
+    changeAddr(a),
+    protocolParams(),
+    chain.getGenesisInfos(),
+    walletUtxos(a),
+  ]);
+  // Largest UTxO, not utxos[0]: both txs must be fundable from that ONE input (that's the point —
+  // they compete for it), and coin selection needs the amount + ~2.1 ₳ on top.
+  const [biggest] = [...utxos].sort((x, y) => (y.resolved.value.lovelaces > x.resolved.value.lovelaces ? 1 : -1));
+  if (!biggest) throw new Error('wallet has no UTxO');
+  if (biggest.resolved.value.lovelaces < 3_600_000n) {
+    throw new Error(`largest utxo is ${fmtAda(biggest.resolved.value.lovelaces)}, needs ≥ 3.60 ₳ to fund both spends`);
+  }
+  const ctx = { protocolParameters, genesisInfos, changeAddress: change, utxos: [biggest] };
+  const a1 = build('tx#1', () => buildSend(ctx, { toAddress: change, lovelace: 1_000_000n }));
+  const a2 = build('tx#2', () => buildSend(ctx, { toAddress: change, lovelace: 1_500_000n })); // same input
+
+  log('   2 competing txs on one UTxO — the popup should flag the conflict…', 'dim');
+  const witnesses = await bulk.signTxs([{ cbor: toHex(a1.toCborBytes()) }, { cbor: toHex(a2.toCborBytes()) }]);
+  return `${witnesses.length} witness set(s) — not submitted (would be a double spend)`;
+}
+
 // ---- UI wiring -----------------------------------------------------------------------------------
 function el<T extends HTMLElement>(id: string): T {
   const found = document.getElementById(id);
@@ -223,8 +349,13 @@ async function run(label: string, fn: () => Promise<unknown>): Promise<void> {
     const short = typeof r === 'string' ? r : JSON.stringify(r);
     log(`✓ ${label} (${ms()}): ${short.length > 160 ? short.slice(0, 160) + '…' : short}`, 'ok');
   } catch (e) {
-    const info = (e as { info?: string }).info ?? (e as Error).message ?? JSON.stringify(e);
-    log(`✗ ${label} (${ms()}): ${info}`, 'err');
+    // CIP-30 errors cross the bridge as `{code, info}` (PaginateError as `{maxSize}`) — surface the
+    // CODE, not just the text: it is what distinguishes "user declined" (TxSignError 2) from "origin
+    // refused" (-3) or "extension not negotiated" (-1), which read almost the same in prose.
+    const err = e as { code?: number; info?: string; maxSize?: number };
+    const info = err.info ?? (e as Error).message ?? JSON.stringify(e);
+    const code = err.code !== undefined ? `[${err.code}] ` : err.maxSize !== undefined ? `[maxSize=${err.maxSize}] ` : '';
+    log(`✗ ${label} (${ms()}): ${code}${info}`, 'err');
   }
 }
 
@@ -242,7 +373,7 @@ function detect(): void {
 
 el('connect').addEventListener('click', () =>
   run('enable()', async () => {
-    api = await provider().enable({ extensions: [{ cip: 95 }] });
+    api = await provider().enable({ extensions: [{ cip: 95 }, { cip: 103 }] });
     // Warm the wallet's address-discovery cache in the background: the first Send/Mint/Burn then
     // finds its wallet reads (getUtxos/getChangeAddress) already answered, and the signTx popup
     // appears near-instantly instead of after a cold gap-limit scan.
@@ -281,6 +412,12 @@ el('sign-data').addEventListener('click', () =>
 el('send').addEventListener('click', () => run('Send 2 ₳ → self', () => doSend(requireApi())));
 el('mint').addEventListener('click', () => run(`Mint 100 ${TOKEN_NAME}`, () => doMint(requireApi())));
 el('burn').addEventListener('click', () => run(`Burn 50 ${TOKEN_NAME}`, () => doBurn(requireApi())));
+el('bulk-chained').addEventListener('click', () =>
+  run('cip103 chained sign+submit', () => doBulkChained(requireApi())),
+);
+el('bulk-conflict').addEventListener('click', () =>
+  run('cip103 same-input sign', () => doBulkSameInput(requireApi())),
+);
 
 // The content script injects at document_start; the provider lands a tick later.
 setTimeout(detect, 300);

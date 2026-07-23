@@ -47,6 +47,17 @@ export const EXTENSION_REGISTRY: ExtensionDef[] = [
       { name: 'signData', placement: 'namespaced' },
     ],
   },
+  {
+    cip: 103, // Bulk / chained transaction signing (CIP-103)
+    namespace: 'cip103',
+    // Verified against cardano-foundation/CIPs CIP-0103/README.md: both methods are namespaced.
+    //   api.cip103.signTxs(txs: {cbor, partialSign}[]) -> cbor<transaction_witness_set>[]
+    //   api.cip103.submitTxs(txs: cbor<transaction>[]) -> (hash32 | TxSendError)[]
+    methods: [
+      { name: 'signTxs', placement: 'namespaced' },
+      { name: 'submitTxs', placement: 'namespaced' },
+    ],
+  },
 ];
 
 /** CIP numbers of every extension this wallet can grant. */

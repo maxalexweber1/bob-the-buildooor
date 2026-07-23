@@ -32,8 +32,14 @@ record. The binding invariants live in [CLAUDE.md §1](../CLAUDE.md).
 - The authorizing **origin is Chrome's `port.sender.origin`** — never trusted from the page or a
   (possibly compromised) content script.
 - Every gated method requires an allowlisted origin **and** an unlocked wallet.
-- **Per-call consent:** `enable`, `signTx`, `signData` each open a trusted popup window. A closed
-  window counts as a decline.
+- **Per-call consent:** `enable`, `signTx`, `signData` and `cip103.signTxs` each open a trusted popup
+  window. A closed window counts as a decline.
+- **Bulk signing is not bulk blind-signing (CIP-103):** `cip103.signTxs` takes ONE approval for the
+  batch, but the prompt decodes **every** transaction in it with the same decoder as a single `signTx`,
+  says plainly that approving signs all of them, and labels chained and same-input (competing) entries.
+  Batches are capped at 20 — a prompt too long to review would be blind-signing by volume. A batch
+  resolves one shared set of input UTxOs, so signing keys are selected per transaction: a sibling's
+  wallet-owned input never adds a witness to a transaction that didn't require it.
 - **Decode-before-sign:** `signTx` resolves inputs and renders **all** recipient and own/change
   outputs with their native assets, the fee, **decoded mint/burn** (signed per-asset quantities) and
   **decoded reward withdrawals** (destination + amount). It still **warns** for the components not yet

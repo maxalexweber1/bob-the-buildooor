@@ -41,11 +41,17 @@ era copies. Delete the whole file when PR #21 ships in a released version.
       enable/reject, send §1.5 CBOR match, signData COSE verify, test-dApp smoke) — `npm run e2e`.
 - [ ] **T6.3 — Ledger (WebHID)** / **T6.4 — Trezor**: code shipped (`f860b31`), but **live device
       verification still pending** (needs physical hardware).
+- [x] **T6.5 — CIP-103 bulk signing** — ✅ **verified in the browser on preview 2026-07-23**: a chained
+      batch (tx#2 spending tx#1's not-yet-submitted output) signed through ONE approval and both txs
+      submitted in order via `cip103.submitTxs`; a same-input (competing) batch returned two witness
+      sets; declining returned no witnesses at all. The chain proof: tx#2 was built against ref
+      `e8ef5cc2882d…#0` *before* submission and tx#1
+      came back from the node as `e8ef5cc2882d7bd7…` — the wallet computed the future tx id and
+      resolved the in-batch output correctly. Full hashes to pin on the next run (the harness now logs
+      untruncated hashes + explorer links). Checklist: `docs/VERIFY.md` 4.13–4.15.
 
 Deferred (post-v1 / nice-to-have):
 
-- [ ] **T6.5 — CIP-103 bulk signing.** Pure add-on via generic dispatch (T6.1); approval must still
-      decode **every** tx in the batch (no batch-blind-sign, §1.5). Implement when a target dApp needs it.
 - [ ] **T7.4 — Firefox port.** Compat audit done; blockers (event-page background, `browser.*`) in `docs/FIREFOX.md`.
 - [ ] **T7.5 — Store submission.** Listing/icons/privacy ✅; screenshots + actual submission deferred.
 - [ ] **NFT images** — IPFS gateway is a hardcoded `ipfs.io` default (could be a setting); no persistent

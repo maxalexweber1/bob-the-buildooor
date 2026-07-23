@@ -4,7 +4,8 @@ A standalone Cardano **self-custody browser-extension wallet** (CIP-30), built o
 [`@harmoniclabs/buildooor`](https://github.com/HarmonicLabs/buildooor).
 
 - **HD wallet** from a BIP39 mnemonic (CIP-1852 derivation), keys encrypted locally, **client-side signing**.
-- **dApp connector** as `window.cardano.<name>` (CIP-30 + CIP-8 `signData` + CIP-95 governance).
+- **dApp connector** as `window.cardano.<name>` (CIP-30 + CIP-8 `signData` + CIP-95 governance +
+  CIP-103 bulk signing).
 - **Transactions** via buildooor: ADA, native tokens, **Plutus** (spend/mint), Conway governance.
 - **Wallet UI:** balances & assets, decode-before-sign send, transaction history, UTxO list, in-popup
   provider switching with a live connection-status badge.

@@ -12,7 +12,7 @@
 import { chromeSessionStore } from '../storage';
 import { approvalStorageKey } from '../../shared/internal';
 
-export type ApprovalType = 'connect' | 'signTx' | 'signData';
+export type ApprovalType = 'connect' | 'signTx' | 'signData' | 'signTxs';
 
 export interface PendingApproval {
   reqId: string;

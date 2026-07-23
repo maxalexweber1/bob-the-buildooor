@@ -67,7 +67,8 @@ with `--load-extension`, a fresh profile per test so chrome.storage starts empty
   `npm run build:dapp`) from a fake origin so the content script injects the provider, then drives
   the real harness — provider detection, `enable()` approval, `getBalance` — against the mock chain.
 
-Still manual: hardware-device flows, and the interactive **test dApp** write flows (send/mint/burn),
+Still manual: hardware-device flows, and the interactive **test dApp** write flows (send/mint/burn,
+CIP-103 bulk sign+submit),
 which need real preview chain data + a funded wallet with collateral — `npm run dev:dapp` →
 http://localhost:5180, checklist in `docs/VERIFY.md` §4.
 

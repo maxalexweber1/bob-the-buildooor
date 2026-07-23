@@ -40,6 +40,33 @@ export interface HwBuiltTx {
   ledgerTx: LedgerTxPayload;
 }
 
+/**
+ * One transaction inside a CIP-103 bulk-signing approval (T6.5). The batch prompt renders every
+ * item's decoded `summary` — a batch is never blind-signed (CLAUDE.md §1.5), no matter how long it is.
+ */
+export interface BulkTxItem {
+  summary: TxSummary;
+  /**
+   * 0-based indexes of EARLIER transactions in the same batch whose outputs this one spends. Those
+   * inputs do not exist on-chain yet, so they are resolved from the batch itself — the user sees real
+   * addresses/values for a chained batch instead of "input could not be resolved".
+   */
+  dependsOn: number[];
+  /**
+   * Indexes of OTHER transactions in the batch that spend at least one of the same inputs. Legal
+   * input (competing/alternative txs), but only one of them can ever settle on-chain — so the
+   * approval says so instead of hiding it.
+   */
+  conflictsWith: number[];
+  /** The dApp asked for a partial signature of this tx (the wallet may own none of its inputs). */
+  partialSign: boolean;
+}
+
+/** Payload of a `signTxs` approval (CIP-103): one prompt, every transaction decoded. */
+export interface BulkSignApprovalPayload {
+  items: BulkTxItem[];
+}
+
 /** CIP-113 context attached to a programmable-token send (T9.5) — rendered in the approval UI. */
 export interface Cip113SendInfo {
   unit: string;

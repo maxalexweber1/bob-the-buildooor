@@ -293,7 +293,7 @@ capability rides this same mechanism. The official CIP-30 extensions register cu
 | Ext | Purpose | Status | Scope for us |
 |---|---|---|---|
 | **CIP-95** | Conway governance | Active | **Must-have** — GovTool refuses to connect without it; shipped by Eternl, Lace, Yoroi, NuFi, Vespr, Typhon. |
-| **CIP-103** | Bulk / chained tx signing (`api.cip103.signTxs` / `submitTxs`) | Active | **Should-have** — only if we target DeFi/batch dApps; one approval for a chain of txs. See §14 defer decision. |
+| **CIP-103** | Bulk / chained tx signing (`api.cip103.signTxs` / `submitTxs`) | Active | **SHIPPED (T6.5)** — one approval for a batch; every tx decoded. Chained *and* same-input (competing) batches supported. See §14. |
 | **CIP-104** | Account public key | Proposed | Nice-to-have. |
 | **CIP-106** | Multisig (native-script) — **disables** `signTx`/`signData`, replaces with `submitUnsignedTx`/`getCompletedTx` | Proposed | Out of scope while we are single-sig. Pairs with CIP-1854. |
 
@@ -366,7 +366,7 @@ capability rides this same mechanism. The official CIP-30 extensions register cu
 → `CIP-31/32/33` (tx decoder for dApp txs) + `CIP-25/68` (NFT display). `CIP-1694` as the governance domain model.
 
 **Optional / later (status from the cardano-foundation/CIPs register, verified 2026-06):**
-- `CIP-103` (bulk tx signing) — *Active*, **should-have** for DeFi UX; defer decision in §14.
+- `CIP-103` (bulk tx signing) — *Active*, **shipped in T6.5** (the §14 defer decision was superseded; see it for the rationale of the reversal).
 - `CIP-1854` (multisig HD) + `CIP-106` (multisig connector) — *Active / Proposed*, **only if multisig becomes a product goal**; both out of scope for single-sig v1.
 - `CIP-104` (account pub-key extension) — *Proposed*, nice-to-have.
 - `CIP-113` (programmable tokens) — *Proposed; assessed 2026-07-17*, **not compatible today, deliberately deferred**.
@@ -426,10 +426,23 @@ Plutus build. Priority for a self-custody wallet:
   > is too slow — so **PBKDF2-≥600k stays the default**. Re-open only if an audited pure-JS Argon2id
   > compatible with `script-src 'self'` appears. (Open: the round did not extract the *current* shipped
   > KDF numbers from Lace/Eternl/Nami/Yoroi — OWASP is the anchor, not a competitor's parameter.)
-- **CIP-103 (bulk tx signing) — defer decision.** *Active* extension, but real-world dApp adoption of
-  `api.cip103.signTxs()` is unverified (open question from the standards review). **Decision: defer to
-  post-v1**, behind the generic extension-dispatch mechanism (§9) so it is a pure add-on when a target dApp
-  actually requires it — no architectural debt from waiting. Re-evaluate once a concrete DeFi integration asks for it.
+- **CIP-103 (bulk tx signing) — deferred, then SHIPPED (T6.5, 2026-07-23).** The original decision was
+  to defer post-v1 (adoption unverified) behind the generic extension dispatch (§9). **Superseded on
+  explicit request.** The bet paid off: it landed as a pure add-on — a registry entry plus two background
+  handlers, with **no** change to the inpage provider, the content relay or the message bridge.
+  Implementation notes that matter beyond the CIP text:
+  - **One approval, zero blind-signing.** A batch prompt renders every transaction through the same
+    `summarizeTx` decoder as single signTx (§1.5 is per-transaction, not per-prompt), states that
+    approving signs all of them, and totals the fees. `MAX_BULK_TXS = 20` — a wallet-side cap the CIP
+    does not define, because a prompt too long to review is blind-signing by volume.
+  - **A batch is not assumed to be a chain.** Chained entries (tx[j] spends tx[i<j]'s output) are
+    resolved from the batch itself — those UTxOs do not exist on-chain yet, and without this the user
+    would see "input could not be resolved" for exactly the transactions the extension exists to enable.
+    **Same-input (competing) entries are equally valid** — two spends of one UTxO, only one of which can
+    settle — and are disclosed in the prompt (`conflictsWith`), never rejected.
+  - **Witness isolation.** The batch resolves one union of input UTxOs, so key selection filters to each
+    transaction's own input/collateral refs: a sibling's wallet-owned input must never produce a witness
+    on a transaction that did not ask for one (same principle as the Conway stake/DRep curation).
 - **CIP-113 programmable tokens — fully implemented as EXPERIMENTAL, on-chain verification pending
   (2026-07-17).** The Cardano Foundation reference implementation
   ([cip113-programmable-tokens](https://github.com/cardano-foundation/cip113-programmable-tokens))

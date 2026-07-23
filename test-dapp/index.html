@@ -51,6 +51,19 @@
       <button id="burn">Burn 50 TESTDAPP</button>
     </div>
 
+    <h2>CIP-103 — bulk signing</h2>
+    <div class="row">
+      <button id="bulk-chained" class="primary">Sign + submit 2 chained txs</button>
+      <button id="bulk-conflict">Sign 2 same-input txs (no submit)</button>
+    </div>
+    <p class="muted">
+      One approval popup for the whole batch — it must show <b>every</b> transaction. "Chained": tx&nbsp;#1
+      pays 5&nbsp;₳ to itself, tx&nbsp;#2 spends exactly that output (not on-chain yet), both submitted in
+      order via <code>cip103.submitTxs</code> — needs ~7.1&nbsp;₳ in the wallet. "Same-input": two competing
+      spends of one UTxO (≥&nbsp;3.6&nbsp;₳), signed only — submitting both would be a double spend — the
+      popup flags the conflict.
+    </p>
+
     <h2>Output</h2>
     <div id="log"></div>
 

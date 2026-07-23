@@ -84,6 +84,7 @@ import { verifyCoseSign1 } from '../src/core/cose/verify';
 import { toHex, utf8ToBytes } from '../src/core/crypto/encoding';
 import { ProviderHttpError, ProviderTimeoutError } from '../src/background/provider/IChainProvider';
 import type { Cip30Error } from '../src/shared/errors';
+import type { BulkSignApprovalPayload } from '../src/shared/internal';
 
 const ORIGIN = 'https://dapp.example';
 const RECIPIENT =
@@ -513,6 +514,249 @@ describe('handleCip30 — signTx two-phase approval (instant window + spinner)',
   it('malformed tx CBOR fails BEFORE any window opens', async () => {
     await expect(handleCip30('signTx', ['zz-not-cbor', false], ORIGIN)).rejects.toBeTruthy();
     expect(h.openApproval).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleCip30 — CIP-103 bulk signing (T6.5)', () => {
+  const ownPaymentKeyHash = Address.fromString(ownAddr).paymentCreds.hash.toString();
+
+  /** A wallet-owned UTxO with a distinguishable tx id. */
+  function ownUtxo(idByte: string, index = 0, lovelace = 10_000_000n): UTxO {
+    return new UTxO({
+      utxoRef: { id: idByte.repeat(32), index },
+      resolved: { address: ownAddr, value: Value.lovelaces(lovelace) },
+    });
+  }
+  /** Build a real send tx spending exactly `utxos`, change back to the wallet. */
+  function sendTx(utxos: UTxO[], lovelace = 3_000_000n): Tx {
+    return buildSend(
+      {
+        protocolParameters: { ...defaultProtocolParameters, utxoCostPerByte: 4310 },
+        genesisInfos: defaultPreviewGenesisInfos,
+        utxos,
+        changeAddress: ownAddr,
+      },
+      { toAddress: RECIPIENT, lovelace },
+    );
+  }
+  const req = (tx: Tx, partialSign?: boolean) => ({
+    cbor: toHex(tx.toCborBytes()),
+    ...(partialSign === undefined ? {} : { partialSign }),
+  });
+  /** The change output a follow-up tx can chain off (the one paying back to the wallet). */
+  function chainedUtxo(tx: Tx): UTxO {
+    const index = tx.body.outputs.findIndex((o) => o.address.toString() === ownAddr);
+    const resolved = tx.body.outputs[index];
+    if (!resolved) throw new Error('no wallet-owned output to chain from');
+    return new UTxO({ utxoRef: { id: tx.body.hash.toString(), index }, resolved });
+  }
+  /** vkey witnesses in the witness set at `i` of a signTxs result (fails loudly if it is missing). */
+  function vkeysAt(witnesses: string[], i: number) {
+    const hex = witnesses[i];
+    if (hex === undefined) throw new Error(`no witness set at index ${i}`);
+    return TxWitnessSet.fromCbor(hex).vkeyWitnesses ?? [];
+  }
+  const lastPayload = () =>
+    h.setApprovalPayload.mock.calls[0]?.[1] as unknown as BulkSignApprovalPayload | undefined;
+
+  beforeEach(() => {
+    h.state.allow.add(ORIGIN);
+    h.state.ext.set(ORIGIN, [103]);
+    h.provider.resolveUtxos.mockClear();
+    h.provider.resolveUtxos.mockResolvedValue([]);
+  });
+
+  it('is gated on negotiation: cip103.* without it → InvalidRequest (-1)', async () => {
+    h.state.ext.set(ORIGIN, []); // enabled origin, extension NOT negotiated (raw-postMessage bypass)
+    await expect(handleCip30('cip103.signTxs', [[req(sendTx([ownUtxo('aa')]))]], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    await expect(handleCip30('cip103.submitTxs', [['deadbeef']], ORIGIN)).rejects.toMatchObject({ code: -1 });
+  });
+
+  it('signs a batch of INDEPENDENT txs → one witness set per tx, index-aligned', async () => {
+    const u1 = ownUtxo('aa');
+    const u2 = ownUtxo('bb');
+    h.provider.resolveUtxos.mockResolvedValue([u1, u2]);
+    const wits = (await handleCip30('cip103.signTxs', [[req(sendTx([u1])), req(sendTx([u2]))]], ORIGIN)) as string[];
+    expect(wits).toHaveLength(2);
+    for (const w of wits) {
+      const vkeys = TxWitnessSet.fromCbor(w).vkeyWitnesses ?? [];
+      expect(vkeys).toHaveLength(1);
+      expect(vkeys[0]?.vkey.hash.toString()).toBe(ownPaymentKeyHash);
+    }
+  });
+
+  it('CHAINED txs: an input created by an earlier batch tx resolves from the batch, not the chain', async () => {
+    const u1 = ownUtxo('aa');
+    const tx1 = sendTx([u1]);
+    const tx2 = sendTx([chainedUtxo(tx1)], 1_000_000n);
+    // Only tx1's input exists on-chain; tx2's input is tx1's not-yet-submitted change output.
+    h.provider.resolveUtxos.mockResolvedValue([u1]);
+    const wits = (await handleCip30('cip103.signTxs', [[req(tx1), req(tx2)]], ORIGIN)) as string[];
+    expect(wits).toHaveLength(2);
+
+    // The chain lookup was asked ONLY for the on-chain input — the in-batch one is resolved locally.
+    expect(h.provider.resolveUtxos.mock.calls.at(-1)?.[0]).toHaveLength(1);
+    const items = lastPayload()?.items ?? [];
+    expect(items).toHaveLength(2);
+    expect(items[1]?.dependsOn).toEqual([0]); // tx2 chains off tx1
+    expect(items[0]?.dependsOn).toEqual([]);
+    // Decode-before-sign holds for the chained tx too: its input is shown, not counted as unresolved.
+    expect(items[1]?.summary.unresolvedInputs).toBe(0);
+    expect(items[1]?.summary.inputs[0]?.address).toBe(ownAddr);
+    // ...and its wallet-owned in-batch input still produced a real witness.
+    expect(vkeysAt(wits, 1)).toHaveLength(1);
+  });
+
+  it('SAME-INPUT txs: two competing txs spending one UTxO both sign, and the conflict is disclosed', async () => {
+    const u1 = ownUtxo('aa');
+    const a = sendTx([u1], 3_000_000n);
+    const b = sendTx([u1], 4_000_000n); // alternative spend of the SAME input
+    h.provider.resolveUtxos.mockResolvedValue([u1]);
+    const wits = (await handleCip30('cip103.signTxs', [[req(a), req(b)]], ORIGIN)) as string[];
+    expect(wits).toHaveLength(2);
+    expect(vkeysAt(wits, 0)).toHaveLength(1);
+    expect(vkeysAt(wits, 1)).toHaveLength(1);
+    // The shared input is fetched once, and BOTH summaries resolve it (nothing deduped away).
+    expect(h.provider.resolveUtxos.mock.calls.at(-1)?.[0]).toHaveLength(1);
+    const items = lastPayload()?.items ?? [];
+    expect(items[0]?.summary.unresolvedInputs).toBe(0);
+    expect(items[1]?.summary.unresolvedInputs).toBe(0);
+    // Only one of them can ever settle — the approval says so.
+    expect(items[0]?.conflictsWith).toEqual([1]);
+    expect(items[1]?.conflictsWith).toEqual([0]);
+  });
+
+  it('a SHARED COLLATERAL utxo across the batch is not a conflict (normal for a Plutus chain)', async () => {
+    // Two txs, different spending inputs, the SAME collateral UTxO — collateral is only consumed on a
+    // phase-2 failure, so both can settle. Flagging this as "only one can settle" would be wrong.
+    const u1 = ownUtxo('aa');
+    const u2 = ownUtxo('bb');
+    const coll = ownUtxo('cc', 0, 5_000_000n);
+    const withCollateral = (input: UTxO) =>
+      new Tx({
+        body: new TxBody({
+          inputs: [input],
+          outputs: [new TxOut({ address: Address.fromString(RECIPIENT), value: Value.lovelaces(9_800_000n) })],
+          fee: 200_000n,
+          collateralInputs: [coll],
+        }),
+        witnesses: new TxWitnessSet({}),
+      });
+    h.provider.resolveUtxos.mockResolvedValue([u1, u2, coll]);
+    await handleCip30('cip103.signTxs', [[req(withCollateral(u1)), req(withCollateral(u2))]], ORIGIN);
+    const items = lastPayload()?.items ?? [];
+    expect(items[0]?.conflictsWith).toEqual([]);
+    expect(items[1]?.conflictsWith).toEqual([]);
+  });
+
+  it('a sibling tx\'s wallet-owned input never contributes a witness to another tx in the batch', async () => {
+    // u2 belongs to tx2 only. tx1 (foreign input, partialSign) must come back with NO vkey witness —
+    // resolving one union for the whole batch must not leak signatures across transactions.
+    const foreign = new UTxO({
+      utxoRef: { id: 'cc'.repeat(32), index: 0 },
+      resolved: { address: RECIPIENT, value: Value.lovelaces(10_000_000n) },
+    });
+    const u2 = ownUtxo('bb');
+    const tx1 = new Tx({
+      body: new TxBody({
+        inputs: [foreign],
+        outputs: [new TxOut({ address: Address.fromString(RECIPIENT), value: Value.lovelaces(9_800_000n) })],
+        fee: 200_000n,
+      }),
+      witnesses: new TxWitnessSet({}),
+    });
+    h.provider.resolveUtxos.mockResolvedValue([foreign, u2]);
+    const wits = (await handleCip30('cip103.signTxs', [[req(tx1, true), req(sendTx([u2]))]], ORIGIN)) as string[];
+    expect(vkeysAt(wits, 0)).toHaveLength(0);
+    expect(vkeysAt(wits, 1)).toHaveLength(1);
+  });
+
+  it('opens ONE payload-pending prompt and delivers every decoded tx (no batch blind-sign)', async () => {
+    const u1 = ownUtxo('aa');
+    const u2 = ownUtxo('bb');
+    h.provider.resolveUtxos.mockResolvedValue([u1, u2]);
+    await handleCip30('cip103.signTxs', [[req(sendTx([u1])), req(sendTx([u2]))]], ORIGIN);
+    expect(h.openApproval).toHaveBeenCalledTimes(1);
+    expect(h.openApproval).toHaveBeenCalledWith('signTxs', ORIGIN, undefined, { payloadPending: true });
+    const items = lastPayload()?.items ?? [];
+    expect(items).toHaveLength(2);
+    for (const it of items) expect(it.summary).toHaveProperty('outputs'); // decoded, not raw CBOR
+  });
+
+  it('decline → TxSignError UserDeclined (2), no witnesses', async () => {
+    h.state.approve = false;
+    const u1 = ownUtxo('aa');
+    h.provider.resolveUtxos.mockResolvedValue([u1]);
+    await expect(handleCip30('cip103.signTxs', [[req(sendTx([u1]))]], ORIGIN)).rejects.toMatchObject({ code: 2 });
+  });
+
+  it('an unsignable tx fails the WHOLE batch (ProofGeneration 1) naming its index', async () => {
+    const u1 = ownUtxo('aa');
+    const foreign = new UTxO({
+      utxoRef: { id: 'cc'.repeat(32), index: 0 },
+      resolved: { address: RECIPIENT, value: Value.lovelaces(10_000_000n) },
+    });
+    const unsignable = new Tx({
+      body: new TxBody({
+        inputs: [foreign],
+        outputs: [new TxOut({ address: Address.fromString(RECIPIENT), value: Value.lovelaces(9_800_000n) })],
+        fee: 200_000n,
+      }),
+      witnesses: new TxWitnessSet({}),
+    });
+    h.provider.resolveUtxos.mockResolvedValue([u1, foreign]);
+    const err = (await handleCip30('cip103.signTxs', [[req(sendTx([u1])), req(unsignable)]], ORIGIN).catch(
+      (e: unknown) => e,
+    )) as Cip30Error;
+    expect(err.code).toBe(1);
+    expect(err.info).toContain('tx[1]');
+  });
+
+  it('malformed batches are rejected (-1) BEFORE any prompt opens, naming the bad index', async () => {
+    const good = req(sendTx([ownUtxo('aa')]));
+    for (const bad of [[], 'nope', undefined, [{ partialSign: true }], [good, { cbor: 42 }]]) {
+      await expect(handleCip30('cip103.signTxs', [bad], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    }
+    const err = (await handleCip30('cip103.signTxs', [[good, { cbor: 'zz-not-cbor' }]], ORIGIN).catch(
+      (e: unknown) => e,
+    )) as Cip30Error;
+    expect(err.info).toContain('tx[1]');
+    const partial = (await handleCip30('cip103.signTxs', [[{ ...good, partialSign: 'yes' }]], ORIGIN).catch(
+      (e: unknown) => e,
+    )) as Cip30Error;
+    expect(partial.info).toContain('partialSign');
+    expect(h.openApproval).not.toHaveBeenCalled();
+  });
+
+  it('caps the batch size (an unreviewable prompt is blind-signing) → InvalidRequest (-1)', async () => {
+    const one = req(sendTx([ownUtxo('aa')]));
+    await expect(handleCip30('cip103.signTxs', [Array(21).fill(one)], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    expect(h.openApproval).not.toHaveBeenCalled();
+  });
+
+  it('submitTxs: submits in order, attempts every tx despite a failure, returns mixed results', async () => {
+    h.provider.submitTx
+      .mockResolvedValueOnce('hash-a')
+      .mockRejectedValueOnce(new ProviderHttpError(400, 'HTTP 400 for https://user:secret@x/api: ValueNotConserved'))
+      .mockResolvedValueOnce('hash-c');
+    const out = (await handleCip30('cip103.submitTxs', [['aa', 'bb', 'cc']], ORIGIN)) as unknown[];
+    expect(h.provider.submitTx.mock.calls.map((c) => c[0])).toEqual(['aa', 'bb', 'cc']); // input order
+    expect(out[0]).toBe('hash-a');
+    expect(out[2]).toBe('hash-c');
+    // The failure is a TxSendError entry in place, carrying the index — and NEVER the raw provider text.
+    expect(out[1]).toEqual({ code: 2, info: 'tx[1]: provider rejected transaction' });
+  });
+
+  it('submitTxs: malformed input → InvalidRequest (-1), nothing submitted', async () => {
+    for (const bad of [[], 'nope', [42], ['aa', ''], Array(21).fill('aa')]) {
+      await expect(handleCip30('cip103.submitTxs', [bad], ORIGIN)).rejects.toMatchObject({ code: -1 });
+    }
+    expect(h.provider.submitTx).not.toHaveBeenCalled();
+  });
+
+  it('submitTxs needs an unlocked wallet', async () => {
+    h.state.unlocked = false;
+    await expect(handleCip30('cip103.submitTxs', [['aa']], ORIGIN)).rejects.toMatchObject({ code: -2 });
   });
 });
 

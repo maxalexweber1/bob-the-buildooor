@@ -4,7 +4,7 @@
 //   - every other method requires an enabled origin AND an unlocked wallet.
 //   - all returns are hex (address bytes / cbor) per the CIP-30 spec.
 //   - signTx (witness-set only) and signData (CIP-8 COSE) are per-call approval-gated (T4.3/T4.5).
-import { Address, StakeAddress, Tx, Value, type UTxO, type XPrv } from '@harmoniclabs/buildooor';
+import { Address, StakeAddress, Tx, UTxO, Value, type TxOutRef, type XPrv } from '@harmoniclabs/buildooor';
 import { allowlist } from '../dapp/allowlist';
 import { requestApproval, openApproval, setApprovalPayload, cancelApproval } from '../dapp/approvals';
 import {
@@ -21,6 +21,7 @@ import {
 } from '../../shared/errors';
 import { vault } from '../vault';
 import { negotiateExtensions, extensionCipOf, type Extension } from '../../shared/extensions';
+import type { BulkTxItem, BulkSignApprovalPayload } from '../../shared/internal';
 import { settings, type WalletSettings } from '../settings';
 import { getProvider } from '../walletProvider';
 import { touchAutoLock } from '../autolock';
@@ -222,6 +223,12 @@ async function authedMethod(method: string, params: unknown[], origin: string): 
     case 'signData':
       return signData(root, s, provider, keys, origin, params[0] as string, params[1] as string);
 
+    // ---- CIP-103 (bulk / chained transaction signing) ----
+    case 'cip103.signTxs':
+      return signTxs(root, s, provider, keys, origin, params[0]);
+    case 'cip103.submitTxs':
+      return submitTxs(provider, params[0]);
+
     // ---- CIP-95 (Conway governance) ----
     case 'cip95.getPubDRepKey':
       return toHex(drepPublicKey(keys));
@@ -311,10 +318,37 @@ async function signTx(
     throw new Cip30Error(TxSignErrorCode.UserDeclined, 'user declined signing');
   }
 
-  // `resolved` covers spending AND collateral inputs, so a wallet-owned collateral input contributes
-  // its payment key here even when no spending input is ours.
+  const signingKeys = signingKeysFor(tx, resolved, owners, root, keys);
+  if (signingKeys.length === 0 && !partialSign) {
+    throw new Cip30Error(TxSignErrorCode.ProofGeneration, 'wallet owns none of the inputs');
+  }
+  return signTxWitnessSet(txCbor, signingKeys);
+}
+
+/**
+ * The CURATED set of wallet keys that must witness `tx` — shared by CIP-30 signTx and CIP-103 signTxs.
+ * Never "offer everything": ledger-ts 0.5.6's `signWith` signs with every key it is handed (0.5.1
+ * filtered to required signers), so a key that lands here becomes a real signature on-chain.
+ *
+ * `resolvedInputs` may hold MORE UTxOs than this tx spends (the bulk path resolves one union for the
+ * whole batch), so it is filtered down to this tx's own input/collateral refs first — otherwise a
+ * sibling tx's wallet-owned input would contribute a witness this transaction never asked for.
+ */
+function signingKeysFor(
+  tx: Tx,
+  resolvedInputs: UTxO[],
+  owners: Map<string, OwnerRef>,
+  root: XPrv,
+  keys: AccountKeys,
+): XPrv[] {
+  // Collateral counts alongside spending inputs: a wallet-owned collateral input needs our witness
+  // even when no spending input is ours.
+  const ownRefs = new Set(
+    [...tx.body.inputs, ...(tx.body.collateralInputs ?? [])].map((i) => i.utxoRef.toString()),
+  );
   const signerRefs = new Map<string, OwnerRef>();
-  for (const u of resolved) {
+  for (const u of resolvedInputs) {
+    if (!ownRefs.has(u.utxoRef.toString())) continue;
     const o = owners.get(u.resolved.address.toString());
     if (o) signerRefs.set(`${o.role}/${o.index}`, o);
   }
@@ -336,15 +370,11 @@ async function signTx(
     }
   }
 
-  if (signerRefs.size === 0 && !partialSign) {
-    throw new Cip30Error(TxSignErrorCode.ProofGeneration, 'wallet owns none of the inputs');
-  }
   const signingKeys = [...signerRefs.values()].map((o) => deriveKey(root, 0, o.role, o.index));
 
   // Conway (CIP-95): certificates, governance votes and reward withdrawals are authorized by the
   // STAKE (…/2/0) and DRep (…/3/0) keys, not a payment key. Offer each ONLY when the tx actually
-  // requires that key's hash: ledger-ts 0.5.6's signWith signs with every key it is handed (0.5.1
-  // filtered to required signers), and a wallet must never emit a signature the tx doesn't need.
+  // requires that key's hash — a wallet must never emit a signature the tx doesn't need.
   // VERIFIED ON-CHAIN (preview, 2026-07-17): stake-reg + vote-delegation built/decoded/signed via
   // this path, accepted in tx 35806f030bc8a3e42c6c1f03143ee27ef377859d9a794ed0a52adc90ac139ad5.
   const conwayNeeded = conwayRequiredKeyHashes(tx);
@@ -354,7 +384,243 @@ async function signTx(
   if (conwayNeeded.has(toHex(keyHash28(drepPublicKey(keys))))) {
     signingKeys.push(deriveKey(root, 0, Role.DRep, 0));
   }
-  return signTxWitnessSet(txCbor, signingKeys);
+  return signingKeys;
+}
+
+// ---- CIP-103: bulk / chained transaction signing (T6.5) ------------------------------------------
+
+/**
+ * Hard cap on a bulk request. NOT in CIP-103 — a wallet-side control: an unbounded array would let a
+ * hostile dApp drive unbounded chain lookups and, worse, render a prompt no human can actually review,
+ * which would turn "one approval for N transactions" into batch blind-signing (CLAUDE.md §1.5).
+ */
+const MAX_BULK_TXS = 20;
+
+/** One validated entry of a CIP-103 `TransactionSignatureRequest[]`. */
+interface BulkEntry {
+  cbor: string;
+  partialSign: boolean;
+  tx: Tx;
+}
+
+/**
+ * Validate the untrusted `txs` argument of cip103.signTxs. Every rejection names the offending index —
+ * CIP-103 requires errors to reference the failing transaction. Runs BEFORE any window opens, so a
+ * malformed batch can never put a prompt on screen.
+ */
+function parseBulkSignRequest(param: unknown): BulkEntry[] {
+  if (!Array.isArray(param) || param.length === 0) {
+    throw invalidRequest('cip103.signTxs: expected a non-empty array of { cbor, partialSign }');
+  }
+  if (param.length > MAX_BULK_TXS) {
+    throw invalidRequest(`cip103.signTxs: at most ${MAX_BULK_TXS} transactions per batch (got ${param.length})`);
+  }
+  return param.map((raw, i) => {
+    const entry = raw as { cbor?: unknown; partialSign?: unknown } | null;
+    if (typeof entry?.cbor !== 'string') {
+      throw invalidRequest(`cip103.signTxs: tx[${i}] — missing or non-string \`cbor\``);
+    }
+    if (entry.partialSign !== undefined && typeof entry.partialSign !== 'boolean') {
+      throw invalidRequest(`cip103.signTxs: tx[${i}] — \`partialSign\` must be a boolean`);
+    }
+    let tx: Tx;
+    try {
+      tx = Tx.fromCbor(entry.cbor);
+    } catch {
+      throw invalidRequest(`cip103.signTxs: tx[${i}] — malformed transaction CBOR`);
+    }
+    return { cbor: entry.cbor, partialSign: entry.partialSign === true, tx };
+  });
+}
+
+/** Spending + collateral refs of one tx, as `txHash#index` strings — everything it must resolve. */
+function spentRefs(tx: Tx): string[] {
+  return [...tx.body.inputs, ...(tx.body.collateralInputs ?? [])].map((i) => i.utxoRef.toString());
+}
+
+/**
+ * SPENDING input refs only. Conflict detection deliberately ignores collateral: a batch of Plutus txs
+ * routinely declares the SAME collateral UTxO in every transaction, and that is not a conflict —
+ * collateral is only consumed when a script fails phase-2, so all of them can settle.
+ */
+function spendingRefs(tx: Tx): string[] {
+  return tx.body.inputs.map((i) => i.utxoRef.toString());
+}
+
+/**
+ * CIP-103 `api.cip103.signTxs(txs)` — ONE approval for a whole batch, returning a witness set per
+ * transaction, index-aligned with the input array.
+ *
+ * The batch is deliberately NOT assumed to be a chain. Three shapes all work:
+ *  - independent txs;
+ *  - CHAINED txs, where tx[j] spends an output tx[i<j] creates — those inputs don't exist on-chain
+ *    yet, so they are resolved from the batch itself (`producedInBatch`) instead of showing up as
+ *    "input could not be resolved" in the approval;
+ *  - SAME-INPUT txs, where two entries spend the same UTxO (competing/alternative txs — only one can
+ *    ever settle). That is legal input: each gets its own witness, nothing is deduplicated away, and
+ *    the conflict is SURFACED in the prompt rather than silently rejected.
+ *
+ * Sign errors throw (with the failing index) so no witness is returned for any tx in the batch, per
+ * spec. Entries are processed strictly in input order.
+ */
+async function signTxs(
+  root: XPrv,
+  s: WalletSettings,
+  provider: IChainProvider,
+  keys: AccountKeys,
+  origin: string,
+  param: unknown,
+): Promise<string[]> {
+  const entries = parseBulkSignRequest(param); // malformed batch → throws before any window opens
+  const refsPerEntry = entries.map((e) => spentRefs(e.tx));
+  const spendsPerEntry = entries.map((e) => spendingRefs(e.tx));
+
+  // Outputs created inside the batch, keyed by their future utxo ref. The FIRST producer wins (a
+  // batch may legitimately repeat an identical tx; the earlier index is the one later txs chain off).
+  const producedInBatch = new Map<string, { utxo: UTxO; index: number }>();
+  entries.forEach((e, i) => {
+    const id = e.tx.body.hash.toString();
+    e.tx.body.outputs.forEach((resolved, outIdx) => {
+      const utxo = new UTxO({ utxoRef: { id, index: outIdx }, resolved });
+      const key = utxo.utxoRef.toString();
+      if (!producedInBatch.has(key)) producedInBatch.set(key, { utxo, index: i });
+    });
+  });
+  /** UTxOs produced by entries BEFORE `index` — the only in-batch outputs tx[index] may spend. */
+  const batchUtxosBefore = (index: number): UTxO[] =>
+    [...producedInBatch.values()].filter((p) => p.index < index).map((p) => p.utxo);
+
+  // Refs that still need a chain lookup: everything not produced earlier in the batch, deduped so a
+  // shared (same-input) ref is fetched once and reused by every tx that spends it.
+  const seen = new Set<string>();
+  const chainRefs: TxOutRef[] = [];
+  entries.forEach((e, i) => {
+    for (const input of [...e.tx.body.inputs, ...(e.tx.body.collateralInputs ?? [])]) {
+      const key = input.utxoRef.toString();
+      const local = producedInBatch.get(key);
+      if ((local && local.index < i) || seen.has(key)) continue;
+      seen.add(key);
+      chainRefs.push(input.utxoRef);
+    }
+  });
+
+  // Same overlap strategy as signTx: start the chain work, open the window immediately with a
+  // spinner, fill in the decoded batch when it lands (decode-before-sign, §1.5).
+  const work = Promise.all([
+    provider.resolveUtxos(chainRefs),
+    ownerMap(root, s, provider, keys),
+    Promise.all(entries.map((e) => verifyTxOnNode(provider, e.cbor, e.tx.witnesses.redeemers?.length ?? 0))),
+  ]);
+  work.catch(() => undefined); // handled below — pre-empt a transient unhandled-rejection report
+
+  const approval = await openApproval('signTxs', origin, undefined, { payloadPending: true });
+
+  let resolved: UTxO[];
+  let owners: Map<string, OwnerRef>;
+  try {
+    const [res, own, nodeEvals] = await work;
+    resolved = res;
+    owners = own;
+    const ownAddresses = new Set(owners.keys());
+    const items: BulkTxItem[] = entries.map((e, i) => {
+      const summary = summarizeTx(e.tx, [...resolved, ...batchUtxosBefore(i)], ownAddresses);
+      const nodeEval = nodeEvals[i];
+      if (nodeEval) summary.nodeEval = nodeEval;
+      return {
+        summary,
+        dependsOn: dependsOnInBatch(refsPerEntry, i, producedInBatch),
+        conflictsWith: conflictingEntries(spendsPerEntry, i),
+        partialSign: e.partialSign,
+      };
+    });
+    await setApprovalPayload(approval.reqId, { items } satisfies BulkSignApprovalPayload);
+  } catch (e) {
+    // The batch can never be shown → it can never be approved. Close the spinner, surface the error.
+    await cancelApproval(approval.reqId);
+    throw e;
+  }
+
+  if (!(await approval.decision)) {
+    throw new Cip30Error(TxSignErrorCode.UserDeclined, 'user declined bulk signing');
+  }
+
+  // In input order, per spec. Witnesses are only returned once EVERY tx signed: a throw here leaves
+  // the dApp with nothing, which is exactly what CIP-103 prescribes for a partial failure.
+  const witnesses: string[] = [];
+  for (const [i, e] of entries.entries()) {
+    const inScope = [...resolved, ...batchUtxosBefore(i)];
+    const signingKeys = signingKeysFor(e.tx, inScope, owners, root, keys);
+    if (signingKeys.length === 0 && !e.partialSign) {
+      throw new Cip30Error(TxSignErrorCode.ProofGeneration, `cip103.signTxs: tx[${i}] — wallet owns none of the inputs`);
+    }
+    witnesses.push(signTxWitnessSet(e.cbor, signingKeys));
+  }
+  return witnesses;
+}
+
+/** Indexes of earlier batch entries whose outputs entry `index` spends (its chaining parents). */
+function dependsOnInBatch(
+  refsPerEntry: string[][],
+  index: number,
+  producedInBatch: Map<string, { utxo: UTxO; index: number }>,
+): number[] {
+  const parents = new Set<number>();
+  for (const ref of refsPerEntry[index] ?? []) {
+    const local = producedInBatch.get(ref);
+    if (local && local.index < index) parents.add(local.index);
+  }
+  return [...parents].sort((a, b) => a - b);
+}
+
+/**
+ * Indexes of OTHER entries that spend at least one of the same inputs. Same-input batches are valid
+ * (competing/alternative txs) — this is disclosure, not a rejection: the user is told that only one
+ * of the conflicting transactions can ever settle on-chain.
+ */
+function conflictingEntries(spendsPerEntry: string[][], index: number): number[] {
+  const mine = new Set(spendsPerEntry[index] ?? []);
+  const out: number[] = [];
+  spendsPerEntry.forEach((refs, j) => {
+    if (j === index) return;
+    if (refs.some((ref) => mine.has(ref))) out.push(j);
+  });
+  return out;
+}
+
+/**
+ * CIP-103 `api.cip103.submitTxs(txs)` — submit in input order, ATTEMPTING EVERY transaction even
+ * after one fails (spec), and return an index-aligned array mixing tx hashes with `{code, info}`
+ * TxSendError entries. Errors are the same GENERIC dApp-facing strings as submitTx: raw provider
+ * messages can carry endpoint URLs / upstream bodies and must not reach an untrusted page.
+ */
+async function submitTxs(provider: IChainProvider, param: unknown): Promise<Array<string | { code: number; info: string }>> {
+  if (!Array.isArray(param) || param.length === 0) {
+    throw invalidRequest('cip103.submitTxs: expected a non-empty array of transaction CBOR hex');
+  }
+  if (param.length > MAX_BULK_TXS) {
+    throw invalidRequest(`cip103.submitTxs: at most ${MAX_BULK_TXS} transactions per batch (got ${param.length})`);
+  }
+  param.forEach((tx, i) => {
+    if (typeof tx !== 'string' || tx.length === 0) {
+      throw invalidRequest(`cip103.submitTxs: tx[${i}] — expected a transaction CBOR hex string`);
+    }
+  });
+
+  const results: Array<string | { code: number; info: string }> = [];
+  let anySubmitted = false;
+  for (const [i, txHex] of (param as string[]).entries()) {
+    try {
+      results.push(await provider.submitTx(txHex));
+      anySubmitted = true;
+    } catch (e) {
+      console.warn(`[cip30] cip103.submitTxs tx[${i}] rejected:`, e instanceof Error ? e.message : e);
+      const err = submitErrorFor(e);
+      results.push({ code: err.code, info: `tx[${i}]: ${err.info}` });
+    }
+  }
+  // A submitted tx may pay change to a previously-unused address → the cached used-address set is stale.
+  if (anySubmitted) clearCip30DiscoveryCache();
+  return results;
 }
 
 async function signData(
@@ -620,14 +886,21 @@ async function submit(provider: IChainProvider, txHex: string): Promise<string> 
     clearCip30DiscoveryCache();
     return hash;
   } catch (e) {
-    // dApp-facing error info is GENERIC on purpose: raw provider messages
-    // can reflect the configured endpoint URL or upstream response bodies to an untrusted page.
     // The SANITIZED detail (credential-stripped URL + bounded upstream body — e.g. the node's
     // ValueNotConserved/BadInputsUTxO reason) goes to the trusted SW console: it is the only place
     // a developer can see WHY a submit was rejected. No secrets: tx CBOR is public, URLs sanitized.
     console.warn('[cip30] submitTx rejected:', e instanceof Error ? e.message : e);
-    if (e instanceof ProviderTimeoutError) throw txSendFailure('provider timed out');
-    if (e instanceof ProviderHttpError) throw txSendFailure('provider rejected transaction');
-    throw txSendFailure('submit failed');
+    throw submitErrorFor(e);
   }
+}
+
+/**
+ * Map a provider submit failure to a CIP-30 TxSendError. The dApp-facing info is GENERIC on purpose:
+ * raw provider messages can reflect the configured endpoint URL or upstream response bodies to an
+ * untrusted page. Shared by submitTx and cip103.submitTxs.
+ */
+function submitErrorFor(e: unknown): Cip30Error {
+  if (e instanceof ProviderTimeoutError) return txSendFailure('provider timed out');
+  if (e instanceof ProviderHttpError) return txSendFailure('provider rejected transaction');
+  return txSendFailure('submit failed');
 }
