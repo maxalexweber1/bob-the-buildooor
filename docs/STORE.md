@@ -1,7 +1,9 @@
 # Store Listing — bob-the-buildooor
 
 Notes for an eventual Chrome Web Store / Firefox Add-ons submission. **Not a near-term task** — keep
-this light until we actually publish. Icons are done (`src/assets/icon-{16,48,128}.png`).
+this light until we actually publish. Icons are done (`src/assets/icon-{16,48,128}.png`) — the 128px
+one is also inlined as the CIP-30 `icon` data URI the inpage provider advertises to dApp wallet
+pickers (`src/inpage/provider.ts`, guarded by an e2e decode assertion).
 
 ## Identity
 - **Name:** bob-the-buildooor

@@ -308,6 +308,7 @@ Goal: spend from and mint via Plutus scripts with correct ex-units.
   hardware devices, `docs/VERIFY.md` visuals. See `docs/TESTING.md`.
 - [~] **T7.4 — Firefox port.** **Planned, not shipped — needs a Firefox build target + runtime.** Compat audit done; two blockers (event-page background, `browser.*` namespace) documented in `docs/FIREFOX.md`.
 - [~] **T7.5 — Store listing.** Icons ✅; notes + permission justifications + privacy policy in `docs/STORE.md` / `docs/PRIVACY.md`. Screenshots + submission deferred (not a near-term task).
+  - **CIP-30 provider `icon` ✅ (was the last T7.5 TODO in code).** `src/inpage/provider.ts` shipped an EMPTY `data:image/svg+xml;base64,` placeholder — a dApp wallet picker does `<img src={icon}>`, so it rendered broken and a picker that validates the icon could drop us from its list entirely (found while prepping a third-party preprod dApp integration). Now `import icon from '../assets/icon-128.png?inline'`: one source of truth with the manifest icons, baked in at build time as a base64 data URI. Not a `chrome-extension://` URL — that would leak the extension id to every injected page and fails to render in most pickers. Guarded by an e2e test that DECODES the advertised URI in-page and asserts 128×128 (`e2e/dapp.spec.ts`), so an empty/broken icon can't regress silently. Cost: the MAIN-world inpage bundle goes 1.5 kB → 15.5 kB (11.6 kB gzip).
 
 ---
 

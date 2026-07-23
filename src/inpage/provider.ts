@@ -8,6 +8,12 @@ import {
   type RpcResponse,
 } from '../shared/messages';
 import { SUPPORTED_EXTENSIONS, EXTENSION_REGISTRY, type Extension } from '../shared/extensions';
+// CIP-30 `icon` must be an image URI the dApp can put straight into an <img src> in its wallet
+// picker. `?inline` bakes the extension's own icon in as a base64 data URI at build time: one source
+// of truth with the manifest icons, and no chrome-extension:// URL — that would both leak our
+// extension id to every page we inject into and fail to render in most pickers. An EMPTY icon (the
+// pre-T7.5 placeholder) renders broken, and a picker that validates it can drop us from the list.
+import iconDataUri from '../assets/icon-128.png?inline';
 
 const WALLET_KEY = 'bob';
 const WALLET_NAME = 'bob-the-buildooor';
@@ -93,7 +99,7 @@ function fullApi(enabledCips: number[]) {
 const cardanoApi = {
   apiVersion: '1',
   name: WALLET_NAME,
-  icon: 'data:image/svg+xml;base64,', // TODO(T7.5)
+  icon: iconDataUri,
   supportedExtensions: SUPPORTED_EXTENSIONS,
   isEnabled: () => request<boolean>('isEnabled'),
   enable: async (opts?: { extensions?: Extension[] }) => {
