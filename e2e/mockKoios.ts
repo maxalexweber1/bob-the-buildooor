@@ -101,6 +101,28 @@ export async function startMockChain(config: MockChainConfig): Promise<MockChain
           json(used ? [{ tx_hash: config.txHash, block_height: 1, block_time: 1_700_000_000 }] : []);
           return;
         }
+        // Input resolution for a dApp-provided tx (signTx / cip103.signTxs): the wallet asks for
+        // specific `txHash#index` refs so the approval can show what is actually being spent. Only
+        // the configured funding UTxO exists here — anything else resolves to nothing, which is the
+        // realistic answer for a ref that isn't on-chain (e.g. one created inside a CIP-103 batch).
+        case '/utxo_info': {
+          const { _utxo_refs } = JSON.parse(body.toString() || '{}') as { _utxo_refs?: string[] };
+          const funding = `${config.txHash}#0`;
+          json(
+            (_utxo_refs ?? []).includes(funding)
+              ? [
+                  {
+                    tx_hash: config.txHash,
+                    tx_index: 0,
+                    address: config.fundedAddress,
+                    value: config.lovelace,
+                    asset_list: [],
+                  },
+                ]
+              : [],
+          );
+          return;
+        }
         case '/cli_protocol_params':
           json(CLI_PARAMS);
           return;

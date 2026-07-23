@@ -37,8 +37,9 @@ era copies. Delete the whole file when PR #21 ships in a released version.
       vote-delegation built, decoded (`summarizeTx`) and signed through the wallet path, confirmed on
       preview — tx `35806f030bc8a3e42c6c1f03143ee27ef377859d9a794ed0a52adc90ac139ad5`. Signing-key
       curation pinned by `test/cip30.test.ts` ("NEVER the DRep key").
-- [x] **T7.3 — e2e tests (Playwright).** ✅ 9 specs green (wallet lifecycle, vault-at-rest, dApp
-      enable/reject, send §1.5 CBOR match, signData COSE verify, test-dApp smoke) — `npm run e2e`.
+- [x] **T7.3 — e2e tests (Playwright).** ✅ 12 specs green (wallet lifecycle, vault-at-rest, dApp
+      enable/reject, provider icon + supportedExtensions, send §1.5 CBOR match, signData COSE verify,
+      CIP-103 chained bulk signing + decline, test-dApp smoke) — `npm run e2e`.
 - [ ] **T6.3 — Ledger (WebHID)** / **T6.4 — Trezor**: code shipped (`f860b31`), but **live device
       verification still pending** (needs physical hardware).
 - [x] **T6.5 — CIP-103 bulk signing** — ✅ **verified in the browser on preview 2026-07-23**: a chained

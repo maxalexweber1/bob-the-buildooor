@@ -63,6 +63,13 @@ with `--load-extension`, a fresh profile per test so chrome.storage starts empty
   verified** against the wallet's payment key over the body hash — and dApp `signData` with its
   per-call approval (§1.4), the returned COSE_Sign1 verified against the wallet key and payload.
 
+- **CIP-103 bulk signing** (`bulk.spec.ts`): a CHAINED batch built in Node (tx#2 spends an output
+  tx#1 has not submitted) handed to `api.cip103.signTxs` over the real bridge. Asserts the ONE
+  approval window renders **both** transactions — including the chained input resolved from the batch
+  instead of "could not be resolved" (§1.5) — that both returned witness sets carry exactly one vkey
+  witness which verifies Ed25519 against **its own** tx's body hash (index-aligned, no cross-signing),
+  and that declining yields no witness for any transaction in the batch (TxSignError 2).
+
 - **Test-dApp smoke** (`testdapp.spec.ts`): serves the BUILT test dApp (`dist-dapp/`, from
   `npm run build:dapp`) from a fake origin so the content script injects the provider, then drives
   the real harness — provider detection, `enable()` approval, `getBalance` — against the mock chain.
