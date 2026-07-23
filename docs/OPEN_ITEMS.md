@@ -44,11 +44,12 @@ era copies. Delete the whole file when PR #21 ships in a released version.
 - [x] **T6.5 — CIP-103 bulk signing** — ✅ **verified in the browser on preview 2026-07-23**: a chained
       batch (tx#2 spending tx#1's not-yet-submitted output) signed through ONE approval and both txs
       submitted in order via `cip103.submitTxs`; a same-input (competing) batch returned two witness
-      sets; declining returned no witnesses at all. The chain proof: tx#2 was built against ref
-      `e8ef5cc2882d…#0` *before* submission and tx#1
-      came back from the node as `e8ef5cc2882d7bd7…` — the wallet computed the future tx id and
-      resolved the in-batch output correctly. Full hashes to pin on the next run (the harness now logs
-      untruncated hashes + explorer links). Checklist: `docs/VERIFY.md` 4.13–4.15.
+      sets; declining returned no witnesses at all. **Confirmed on-chain, both in block 4499951:**
+      tx#1 `e8ef5cc2882d7bd79ccad0f11f8ce52d306a361cd3500a4b82c14493c468129f` (index 1, fee 0.18 ₳) and
+      tx#2 `0086fae400f05039453ef9d0b27b7f1352d91a49a7dc0613633642df991bc1ee` (index 2, fee 0.17 ₳).
+      **Chain proof:** tx#2's only input is `e8ef5cc2882d7bd7…#0` (5 ₳) — the output tx#1 creates. So the
+      wallet computed tx#1's future id, resolved a UTxO that did not exist on-chain, and the node
+      accepted the whole chain in ONE block, in order. Checklist: `docs/VERIFY.md` 4.13–4.15.
 
 Deferred (post-v1 / nice-to-have):
 
